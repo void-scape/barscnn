@@ -31,6 +31,7 @@ where
 }
 
 pub enum Compression {
+    Grayscale,
     Rgb,
     BitFields { r: u32, g: u32, b: u32 },
 }
@@ -80,7 +81,7 @@ fn bmp_from_bytes(bytes: &[u8]) -> Result<BmpReader<'_>, &'static str> {
     let data_index = u32(input)?;
 
     let header_size = u32(input)?;
-    if header_size != 124 {
+    if header_size != 124 && header_size != 40 {
         return Err(String::leak(format!(
             "Unrecognized BMP header, size is {header_size}"
         )));
@@ -96,15 +97,15 @@ fn bmp_from_bytes(bytes: &[u8]) -> Result<BmpReader<'_>, &'static str> {
 
     let compression = match u32(input)? {
         0 => {
-            if bpp != 24 {
-                return Err(String::leak(format!("Unsupported bits per pixel: {bpp}")));
-            }
-
             let current_index = 0x22;
             let skip = data_index - current_index;
             *input = &input[skip as usize..];
 
-            Compression::Rgb
+            match bpp {
+                8 => Compression::Grayscale,
+                24 => Compression::Rgb,
+                _ => return Err(String::leak(format!("Unsupported bits per pixel: {bpp}"))),
+            }
         }
         3 => {
             if bpp != 32 {

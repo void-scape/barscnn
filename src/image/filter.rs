@@ -1,5 +1,7 @@
 use std::marker::PhantomData;
 
+use crate::image::pixel::Pixels;
+
 use super::Image;
 use super::pixel::{Grayscale, Pixel};
 
@@ -96,7 +98,7 @@ where
     let mut output = Image {
         width,
         height,
-        pixels: vec![To::default(); width as usize * height as usize],
+        pixels: Pixels::new(vec![To::default(); width as usize * height as usize]),
     };
 
     for h in 0..height as usize {
@@ -139,7 +141,7 @@ where
     let mut output = Image {
         width,
         height,
-        pixels: vec![To::default(); width as usize * height as usize],
+        pixels: Pixels::new(vec![To::default(); width as usize * height as usize]),
     };
 
     let input_width = input.width as i32;
@@ -193,7 +195,7 @@ mod test {
                 let image = Image {
                     width: x as u32,
                     height: y as u32,
-                    pixels: (0..x * y).map(|p| Grayscale(p as f32)).collect(),
+                    pixels: Pixels::new((0..x * y).map(|p| p as f32).collect()),
                 };
                 let filter = vertical_sobel::<Grayscale>();
                 filter.conv(&image);
@@ -207,11 +209,11 @@ mod test {
             width: 10,
             height: 3,
             #[rustfmt::skip]
-            pixels: vec![
+            pixels: Pixels::new(vec![
                 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0,
                 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1,
                 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2,
-            ],
+            ]),
         };
 
         let filter = Filter::<f32, Grayscale>::new(vec![1.0, -1.0, -1.0, 1.0]);
@@ -248,11 +250,11 @@ mod test {
 
         for (i, (&actual, &expected)) in result.pixels.iter().zip(expected.iter()).enumerate() {
             assert!(
-                (actual.0 - expected).abs() < 1e-6,
+                (actual - expected).abs() < 1e-6,
                 "Test 1: Pixel {} mismatch: expected {}, got {}",
                 i,
                 expected,
-                actual.0
+                actual
             );
         }
     }
@@ -263,12 +265,12 @@ mod test {
             width: 4,
             height: 4,
             #[rustfmt::skip]
-            pixels: vec![
+            pixels: Pixels::new(vec![
                 0.1, 0.2, 0.3, 0.4,
                 0.5, 0.6, 0.7, 0.8,
                 0.9, 1.0, 0.0, 0.1,
                 0.2, 0.3, 0.4, 0.5,
-            ],
+            ]),
         };
 
         let filter = Filter::<f32, Grayscale>::new([2.0]);
@@ -284,11 +286,11 @@ mod test {
 
         for (i, (&actual, &expected)) in result.pixels.iter().zip(expected.iter()).enumerate() {
             assert!(
-                (actual.0 - expected).abs() < 1e-6,
+                (actual - expected).abs() < 1e-6,
                 "Test 2: Pixel {} mismatch: expected {}, got {}",
                 i,
                 expected,
-                actual.0
+                actual
             );
         }
     }
@@ -299,7 +301,7 @@ mod test {
             width: 7,
             height: 7,
             #[rustfmt::skip]
-            pixels: vec![
+            pixels: Pixels::new(vec![
                 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6,
                 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7,
                 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8,
@@ -307,7 +309,7 @@ mod test {
                 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0,
                 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.0,
                 0.6, 0.7, 0.8, 0.9, 1.0, 0.0, 0.1,
-            ],
+            ]),
         };
 
         // Use a simple 3x3 box filter (all weights = 1/9)
@@ -323,37 +325,37 @@ mod test {
         // Position (0,0) - top-left 3x3 region average
         let expected_0_0 = (0.0 + 0.1 + 0.2 + 0.1 + 0.2 + 0.3 + 0.2 + 0.3 + 0.4) / 9.0;
         assert!(
-            (result.pixels[0].0 - expected_0_0).abs() < 1e-6,
+            (result.pixels[0] - expected_0_0).abs() < 1e-6,
             "Test 3: Position (0,0) mismatch: expected {}, got {}",
             expected_0_0,
-            result.pixels[0].0
+            result.pixels[0]
         );
 
         // Position (2,2) - center 3x3 region average
         let expected_2_2 = (0.4 + 0.5 + 0.6 + 0.5 + 0.6 + 0.7 + 0.6 + 0.7 + 0.8) / 9.0;
         assert!(
-            (result.pixels[2 * 5 + 2].0 - expected_2_2).abs() < 1e-6,
+            (result.pixels[2 * 5 + 2] - expected_2_2).abs() < 1e-6,
             "Test 3: Position (2,2) mismatch: expected {}, got {}",
             expected_2_2,
-            result.pixels[2 * 5 + 2].0
+            result.pixels[2 * 5 + 2]
         );
 
         // Position (4,4) - bottom-right 3x3 region average
         let expected_4_4 = (0.8 + 0.9 + 1.0 + 0.9 + 1.0 + 0.0 + 1.0 + 0.0 + 0.1) / 9.0;
         assert!(
-            (result.pixels[4 * 5 + 4].0 - expected_4_4).abs() < 1e-6,
+            (result.pixels[4 * 5 + 4] - expected_4_4).abs() < 1e-6,
             "Test 3: Position (4,4) mismatch: expected {}, got {}",
             expected_4_4,
-            result.pixels[4 * 5 + 4].0
+            result.pixels[4 * 5 + 4]
         );
 
         // Verify all pixels are within expected range [0, 1]
         for (i, &pixel) in result.pixels.iter().enumerate() {
             assert!(
-                pixel.0 >= 0.0 && pixel.0 <= 1.0,
+                pixel >= 0.0 && pixel <= 1.0,
                 "Test 3: Pixel {} out of range [0,1]: {}",
                 i,
-                pixel.0
+                pixel
             );
         }
     }
@@ -364,7 +366,7 @@ mod test {
             width: 7,
             height: 7,
             #[rustfmt::skip]
-            pixels: vec![
+            pixels: Pixels::new(vec![
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.2, 0.3, 0.4, 0.5, 0.6, 0.0,
                 0.0, 0.3, 0.4, 0.5, 0.6, 0.7, 0.0,
@@ -372,19 +374,19 @@ mod test {
                 0.0, 0.5, 0.6, 0.7, 0.8, 0.9, 0.0,
                 0.0, 0.6, 0.7, 0.8, 0.9, 1.0, 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-            ],
+            ]),
         };
         let normal_image = Image {
             width: 5,
             height: 5,
             #[rustfmt::skip]
-            pixels: vec![
+            pixels: Pixels::new(vec![
                 0.2, 0.3, 0.4, 0.5, 0.6,
                 0.3, 0.4, 0.5, 0.6, 0.7,
                 0.4, 0.5, 0.6, 0.7, 0.8,
                 0.5, 0.6, 0.7, 0.8, 0.9,
                 0.6, 0.7, 0.8, 0.9, 1.0,
-            ],
+            ]),
         };
 
         let filter = Filter::<f32, Grayscale>::new([1.0 / 9.0; 9]);
@@ -392,7 +394,10 @@ mod test {
         let conv_result = filter.conv(&padded_image);
         let conv_padded_result = filter.conv_padded(&normal_image);
 
-        assert_eq!(conv_result.pixels, conv_padded_result.pixels);
+        assert_eq!(
+            conv_result.pixels.as_slice(),
+            conv_padded_result.pixels.as_slice()
+        );
         assert_eq!(conv_result.width, conv_padded_result.width);
         assert_eq!(conv_result.height, conv_padded_result.height);
     }

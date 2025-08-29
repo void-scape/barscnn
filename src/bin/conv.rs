@@ -1,10 +1,10 @@
-use barscnn::image::{self, Image, pixel::Rgb};
+use barscnn::image;
 
 fn main() {
     let bytes = std::fs::read("assets/mandelbrot.bmp").unwrap();
     let bmp = image::bmp::from_bytes(&bytes).unwrap();
 
-    let image = Image::<Rgb>::from_bmp(&bmp).unwrap();
+    let image = image::rgb_from_bmp(&bmp).unwrap();
     let filter = image::filter::vertical_sobel();
 
     let output = filter.conv_padded(&image);

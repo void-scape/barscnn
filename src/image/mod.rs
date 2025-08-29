@@ -1,21 +1,34 @@
 use self::bmp::{BmpReader, BmpWriter};
-use self::pixel::Pixel;
+use self::pixel::{Grayscale, Pixel, PixelArray, Pixels, Rgb};
 
 pub mod bmp;
 pub mod filter;
+pub mod linear;
 pub mod pixel;
 pub mod pool;
 
+pub fn rgb_from_bmp(bmp: &BmpReader) -> Result<Image<Rgb>, &'static str> {
+    rgb_image_from_bmp(bmp)
+}
+
+pub fn grayscale_from_bmp(bmp: &BmpReader) -> Result<Image<Grayscale>, &'static str> {
+    grayscale_image_from_bmp(bmp)
+}
+
 #[derive(Debug)]
-pub struct Image<Pixel> {
+pub struct Image<T> {
     width: u32,
     height: u32,
-    pixels: Vec<Pixel>,
+    pixels: Pixels<T>,
 }
 
 impl<T: Pixel> Image<T> {
-    pub fn from_bmp(bmp: &BmpReader) -> Result<Self, &'static str> {
-        image_from_bmp(bmp)
+    pub fn width(&self) -> usize {
+        self.width as usize
+    }
+
+    pub fn height(&self) -> usize {
+        self.height as usize
     }
 
     pub fn as_bmp(&self) -> BmpWriter<'_, T> {
@@ -39,7 +52,7 @@ impl<T: Pixel> Image<T> {
         Self {
             width: self.width,
             height: self.height + other.height,
-            pixels,
+            pixels: Pixels::new(pixels),
         }
     }
 
@@ -48,10 +61,22 @@ impl<T: Pixel> Image<T> {
     }
 }
 
-fn image_from_bmp<T>(bmp: &BmpReader) -> Result<Image<T>, &'static str>
-where
-    T: Pixel,
-{
+impl Image<Grayscale> {
+    pub fn flatten<const LEN: usize>(&self) -> PixelArray<LEN> {
+        if self.pixels.len() != LEN {
+            panic!(
+                "called `Image::flatten` with the incorrect `LEN`, expected {}, got {LEN}",
+                self.pixels.len()
+            );
+        }
+
+        let mut arr = [0.0; LEN];
+        arr.copy_from_slice(self.pixels.as_slice());
+        PixelArray::new(arr)
+    }
+}
+
+fn rgb_image_from_bmp(bmp: &BmpReader) -> Result<Image<Rgb>, &'static str> {
     let mut pixels = Vec::with_capacity((bmp.width * bmp.height) as usize);
 
     fn read_slice<const LEN: usize>(slice: &mut &[u8]) -> [u8; LEN] {
@@ -78,7 +103,7 @@ where
                     let g = input[1];
                     let r = input[2];
                     *input = &input[3..];
-                    pixels.push(T::from_rgb([r, g, b]));
+                    pixels.push(Rgb::from_rgb([r, g, b]));
                 }
             }
         }
@@ -114,15 +139,48 @@ where
                     let r = extract_channel(pixel, r);
                     let g = extract_channel(pixel, g);
                     let b = extract_channel(pixel, b);
-                    pixels.push(T::from_rgb([r, g, b]));
+                    pixels.push(Rgb::from_rgb([r, g, b]));
                 }
             }
         }
+        bmp::Compression::Grayscale => panic!("BMP file contains grayscale data"),
     }
 
     Ok(Image {
         width: bmp.width,
         height: bmp.height,
-        pixels,
+        pixels: Pixels::new(pixels),
+    })
+}
+
+fn grayscale_image_from_bmp(bmp: &BmpReader) -> Result<Image<Grayscale>, &'static str> {
+    let mut pixels = Vec::with_capacity((bmp.width * bmp.height) as usize);
+
+    match bmp.compression {
+        bmp::Compression::Grayscale => {
+            debug_assert_eq!(bmp.bpp, 8);
+
+            let bpr = bmp.width as usize;
+            let padding = (4 - (bpr % 4)) % 4;
+
+            let bytes = bmp.pixels;
+            let input = &mut &bytes[..];
+            for h in (0..bmp.height as usize).rev() {
+                *input = &bytes[h * bmp.width as usize + padding..];
+
+                for _ in 0..bmp.width {
+                    let l = input[0];
+                    *input = &input[1..];
+                    pixels.push(l as f32 / u8::MAX as f32);
+                }
+            }
+        }
+        _ => panic!("BMP file contains RGB data"),
+    }
+
+    Ok(Image {
+        width: bmp.width,
+        height: bmp.height,
+        pixels: Pixels::new(pixels),
     })
 }

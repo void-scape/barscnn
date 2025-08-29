@@ -1,3 +1,91 @@
+#[derive(Debug)]
+pub struct Pixels<T>(Vec<T>);
+
+impl<T> Pixels<T> {
+    pub fn new(pixels: Vec<T>) -> Self {
+        Self(pixels)
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        &self.0
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.0.iter()
+    }
+}
+
+impl<T> std::ops::Index<usize> for Pixels<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
+    }
+}
+
+impl<T> std::ops::IndexMut<usize> for Pixels<T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.0[index]
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PixelArray<const LEN: usize>([f32; LEN]);
+
+impl<const LEN: usize> Default for PixelArray<LEN> {
+    fn default() -> Self {
+        Self([0.0; LEN])
+    }
+}
+
+impl<const LEN: usize> PixelArray<LEN> {
+    pub fn new(pixels: [f32; LEN]) -> Self {
+        Self(pixels)
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn as_slice(&self) -> &[f32] {
+        &self.0
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &f32> {
+        self.0.iter()
+    }
+
+    pub fn into_inner(self) -> [f32; LEN] {
+        self.0
+    }
+}
+
+impl<const LEN: usize> std::ops::Index<usize> for PixelArray<LEN> {
+    type Output = f32;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
+    }
+}
+
+impl<const LEN: usize> std::ops::IndexMut<usize> for PixelArray<LEN> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.0[index]
+    }
+}
+
 pub trait Pixel: Default + Copy {
     fn from_rgb(rgb: [u8; 3]) -> Self;
     fn to_rgb(self) -> [u8; 3];
@@ -11,32 +99,31 @@ pub trait Pixel: Default + Copy {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
-pub struct Grayscale(pub f32);
+pub type Grayscale = f32;
 
-impl Pixel for Grayscale {
+impl Pixel for f32 {
     fn from_rgb(rgb: [u8; 3]) -> Self {
         let r = rgb[0] as f32 / u8::MAX as f32;
         let g = rgb[1] as f32 / u8::MAX as f32;
         let b = rgb[2] as f32 / u8::MAX as f32;
-        Self(0.2126 * r + 0.7152 * g + 0.0722 * b)
+        0.2126 * r + 0.7152 * g + 0.0722 * b
     }
 
     fn to_rgb(self) -> [u8; 3] {
-        let l = (self.0.clamp(0.0, 1.0) * u8::MAX as f32) as u8;
+        let l = (self.clamp(0.0, 1.0) * u8::MAX as f32) as u8;
         [l, l, l]
     }
 
     fn from_linear_rgb(rgb: [f32; 3]) -> Self {
-        Self(0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2])
+        0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
     }
 
     fn to_linear_rgb(self) -> [f32; 3] {
-        [self.0, self.0, self.0]
+        [self, self, self]
     }
 
     fn luminance(self) -> f32 {
-        self.0
+        self
     }
 }
 
@@ -64,32 +151,5 @@ impl Pixel for Rgb {
 
     fn to_linear_rgb(self) -> [f32; 3] {
         [self.0, self.1, self.2]
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    impl Pixel for f32 {
-        fn from_rgb(rgb: [u8; 3]) -> Self {
-            let r = rgb[0] as f32 / u8::MAX as f32;
-            let g = rgb[1] as f32 / u8::MAX as f32;
-            let b = rgb[2] as f32 / u8::MAX as f32;
-            0.2126 * r + 0.7152 * g + 0.0722 * b
-        }
-
-        fn to_rgb(self) -> [u8; 3] {
-            let l = (self.clamp(0.0, 1.0) * u8::MAX as f32) as u8;
-            [l, l, l]
-        }
-
-        fn from_linear_rgb(rgb: [f32; 3]) -> Self {
-            0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
-        }
-
-        fn to_linear_rgb(self) -> [f32; 3] {
-            [self, self, self]
-        }
     }
 }
