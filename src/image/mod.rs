@@ -4,6 +4,7 @@ use self::pixel::Pixel;
 pub mod bmp;
 pub mod filter;
 pub mod pixel;
+pub mod pool;
 
 #[derive(Debug)]
 pub struct Image<Pixel> {

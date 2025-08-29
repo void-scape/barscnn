@@ -4,6 +4,11 @@ pub trait Pixel: Default + Copy {
 
     fn from_linear_rgb(rgb: [f32; 3]) -> Self;
     fn to_linear_rgb(self) -> [f32; 3];
+
+    fn luminance(self) -> f32 {
+        let rgb = self.to_linear_rgb();
+        0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -28,6 +33,10 @@ impl Pixel for Grayscale {
 
     fn to_linear_rgb(self) -> [f32; 3] {
         [self.0, self.0, self.0]
+    }
+
+    fn luminance(self) -> f32 {
+        self.0
     }
 }
 
@@ -55,5 +64,32 @@ impl Pixel for Rgb {
 
     fn to_linear_rgb(self) -> [f32; 3] {
         [self.0, self.1, self.2]
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    impl Pixel for f32 {
+        fn from_rgb(rgb: [u8; 3]) -> Self {
+            let r = rgb[0] as f32 / u8::MAX as f32;
+            let g = rgb[1] as f32 / u8::MAX as f32;
+            let b = rgb[2] as f32 / u8::MAX as f32;
+            0.2126 * r + 0.7152 * g + 0.0722 * b
+        }
+
+        fn to_rgb(self) -> [u8; 3] {
+            let l = (self.clamp(0.0, 1.0) * u8::MAX as f32) as u8;
+            [l, l, l]
+        }
+
+        fn from_linear_rgb(rgb: [f32; 3]) -> Self {
+            0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+        }
+
+        fn to_linear_rgb(self) -> [f32; 3] {
+            [self, self, self]
+        }
     }
 }

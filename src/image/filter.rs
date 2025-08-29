@@ -186,28 +186,6 @@ where
 mod test {
     use super::*;
 
-    impl Pixel for f32 {
-        fn from_rgb(rgb: [u8; 3]) -> Self {
-            let r = rgb[0] as f32 / u8::MAX as f32;
-            let g = rgb[1] as f32 / u8::MAX as f32;
-            let b = rgb[2] as f32 / u8::MAX as f32;
-            0.2126 * r + 0.7152 * g + 0.0722 * b
-        }
-
-        fn to_rgb(self) -> [u8; 3] {
-            let l = (self.clamp(0.0, 1.0) * u8::MAX as f32) as u8;
-            [l, l, l]
-        }
-
-        fn from_linear_rgb(rgb: [f32; 3]) -> Self {
-            0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
-        }
-
-        fn to_linear_rgb(self) -> [f32; 3] {
-            [self, self, self]
-        }
-    }
-
     #[test]
     fn fuzz() {
         for y in 3..64 {
