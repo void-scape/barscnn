@@ -6,7 +6,7 @@ pub trait Pixel: Default + Copy {
     fn to_linear_rgb(self) -> [f32; 3];
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct Grayscale(pub f32);
 
 impl Pixel for Grayscale {

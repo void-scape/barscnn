@@ -333,17 +333,7 @@ mod test {
         };
 
         // Use a simple 3x3 box filter (all weights = 1/9)
-        let filter = Filter::<f32, Grayscale>::new([
-            1.0 / 9.0,
-            1.0 / 9.0,
-            1.0 / 9.0,
-            1.0 / 9.0,
-            1.0 / 9.0,
-            1.0 / 9.0,
-            1.0 / 9.0,
-            1.0 / 9.0,
-            1.0 / 9.0,
-        ]);
+        let filter = Filter::<f32, Grayscale>::new([1.0 / 9.0; 9]);
         let result = filter.conv(&image);
 
         // Expected dimensions: (7-3+1) x (7-3+1) = 5x5
@@ -388,5 +378,44 @@ mod test {
                 pixel.0
             );
         }
+    }
+
+    #[test]
+    fn conv_padded() {
+        let padded_image = Image {
+            width: 7,
+            height: 7,
+            #[rustfmt::skip]
+            pixels: vec![
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.2, 0.3, 0.4, 0.5, 0.6, 0.0,
+                0.0, 0.3, 0.4, 0.5, 0.6, 0.7, 0.0,
+                0.0, 0.4, 0.5, 0.6, 0.7, 0.8, 0.0,
+                0.0, 0.5, 0.6, 0.7, 0.8, 0.9, 0.0,
+                0.0, 0.6, 0.7, 0.8, 0.9, 1.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ],
+        };
+        let normal_image = Image {
+            width: 5,
+            height: 5,
+            #[rustfmt::skip]
+            pixels: vec![
+                0.2, 0.3, 0.4, 0.5, 0.6,
+                0.3, 0.4, 0.5, 0.6, 0.7,
+                0.4, 0.5, 0.6, 0.7, 0.8,
+                0.5, 0.6, 0.7, 0.8, 0.9,
+                0.6, 0.7, 0.8, 0.9, 1.0,
+            ],
+        };
+
+        let filter = Filter::<f32, Grayscale>::new([1.0 / 9.0; 9]);
+
+        let conv_result = filter.conv(&padded_image);
+        let conv_padded_result = filter.conv_padded(&normal_image);
+
+        assert_eq!(conv_result.pixels, conv_padded_result.pixels);
+        assert_eq!(conv_result.width, conv_padded_result.width);
+        assert_eq!(conv_result.height, conv_padded_result.height);
     }
 }

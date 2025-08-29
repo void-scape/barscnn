@@ -1,7 +1,7 @@
 use barscnn::image::{self, Image, pixel::Rgb};
 
 fn main() {
-    let bytes = std::fs::read("assets/rat.bmp").unwrap();
+    let bytes = std::fs::read("assets/mandelbrot.bmp").unwrap();
     let bmp = image::bmp::from_bytes(&bytes).unwrap();
 
     let image = Image::<Rgb>::from_bmp(&bmp).unwrap();
