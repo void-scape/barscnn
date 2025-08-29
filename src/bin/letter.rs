@@ -1,4 +1,9 @@
 use barscnn::image;
+use barscnn::image::feature::FeatureMapImage;
+use barscnn::image::flatten::FlattenData;
+use barscnn::image::layer::Layer;
+use barscnn::image::linear::{FullyConnectedData, SoftmaxData};
+use barscnn::image::pool::MaxPoolData;
 
 fn main() {
     let bytes = std::fs::read("data/letters/A/A-0.bmp").unwrap();
@@ -9,21 +14,23 @@ fn main() {
     assert_eq!(image.height(), 28);
 
     for _ in 0..5 {
-        let filters = [image::filter::gaussian_blur_3x3(); 8];
-        const INPUT: usize = 14 * 14 * 8;
-        const OUTPUT: usize = 26;
-        let fc = image::linear::FullyConnected::<INPUT, OUTPUT>::glorot();
-
         let iter = 100;
         let mut acc = 0;
         let mut loss = 0.0;
         for _ in 0..iter {
-            let result = image
-                .filter_features(&filters)
+            let filters = [image::filter::gaussian_blur_3x3(); 8];
+            const INPUT: usize = 14 * 14 * 8;
+            const OUTPUT: usize = 26;
+            let fc = image::linear::FcWeights::<INPUT, OUTPUT>::glorot();
+
+            let mut cnn = image
+                .feature_map(&filters)
                 .max_pool(2)
-                .flatten::<INPUT>()
+                .flatten()
                 .fully_connected(&fc)
                 .softmax();
+            let result = cnn.forward();
+
             acc += (result
                 .iter()
                 .enumerate()

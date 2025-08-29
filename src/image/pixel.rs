@@ -1,4 +1,4 @@
-use super::linear::{self, FullyConnected};
+use super::layer::Layer;
 
 #[derive(Debug)]
 pub struct Pixels<T>(Vec<T>);
@@ -72,17 +72,6 @@ impl<const LEN: usize> PixelArray<LEN> {
     pub fn into_inner(self) -> [f32; LEN] {
         self.0
     }
-
-    pub fn fully_connected<const OUTPUT: usize>(
-        &self,
-        fc: &FullyConnected<LEN, OUTPUT>,
-    ) -> PixelArray<OUTPUT> {
-        fc.forward(self)
-    }
-
-    pub fn softmax(&self) -> PixelArray<LEN> {
-        linear::softmax(self)
-    }
 }
 
 impl<const LEN: usize> std::ops::Index<usize> for PixelArray<LEN> {
@@ -96,6 +85,14 @@ impl<const LEN: usize> std::ops::Index<usize> for PixelArray<LEN> {
 impl<const LEN: usize> std::ops::IndexMut<usize> for PixelArray<LEN> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.0[index]
+    }
+}
+
+impl<const LEN: usize> Layer for PixelArray<LEN> {
+    type Item = Self;
+
+    fn forward(&mut self) -> Self::Item {
+        PixelArray(self.into_inner())
     }
 }
 

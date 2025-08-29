@@ -1,9 +1,62 @@
 use crate::image::pixel::Pixels;
 
 use super::Image;
+use super::feature::FeatureSet;
+use super::layer::Layer;
 use super::pixel::{Grayscale, Pixel};
 
-pub fn max_pool<T>(pool: usize, input: &Image<T>) -> Image<Grayscale>
+#[derive(Debug)]
+pub struct MaxPool<Data> {
+    size: usize,
+    data: Data,
+}
+
+pub trait MaxPoolData
+where
+    Self: Sized,
+{
+    fn max_pool(self, size: usize) -> MaxPool<Self>;
+}
+
+impl<T> MaxPoolData for T
+where
+    T: Layer,
+    T::Item: MaxPoolable,
+{
+    fn max_pool(self, size: usize) -> MaxPool<Self> {
+        MaxPool { size, data: self }
+    }
+}
+
+impl<T> Layer for MaxPool<T>
+where
+    T: Layer,
+    T::Item: MaxPoolable,
+{
+    type Item = T::Item;
+
+    fn forward(&mut self) -> Self::Item {
+        self.data.forward().max_pool(self.size)
+    }
+}
+
+trait MaxPoolable {
+    fn max_pool(self, size: usize) -> Self;
+}
+
+impl MaxPoolable for Image<Grayscale> {
+    fn max_pool(self, size: usize) -> Self {
+        max_pool(size, &self)
+    }
+}
+
+impl<const DEPTH: usize> MaxPoolable for FeatureSet<DEPTH> {
+    fn max_pool(self, size: usize) -> Self {
+        FeatureSet::new(self.each_ref().map(|img| max_pool(size, img)))
+    }
+}
+
+fn max_pool<T>(pool: usize, input: &Image<T>) -> Image<Grayscale>
 where
     T: Pixel,
 {

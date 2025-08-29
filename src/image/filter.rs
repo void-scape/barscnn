@@ -3,7 +3,54 @@ use std::marker::PhantomData;
 use crate::image::pixel::Pixels;
 
 use super::Image;
+use super::layer::Layer;
 use super::pixel::{Grayscale, Pixel};
+
+#[derive(Debug)]
+pub struct FilteredImage<'a, Pixel, const WEIGHTS: usize> {
+    image: &'a Image<Pixel>,
+    filter: &'a Filter<WEIGHTS, Pixel, Grayscale>,
+}
+
+impl<'a, const WEIGHTS: usize, Pixel> FilteredImage<'a, Pixel, WEIGHTS> {
+    pub fn new(image: &'a Image<Pixel>, filter: &'a Filter<WEIGHTS, Pixel, Grayscale>) -> Self {
+        Self { image, filter }
+    }
+}
+
+impl<'a, T, const WEIGHTS: usize> Layer for FilteredImage<'a, T, WEIGHTS>
+where
+    T: Pixel,
+{
+    type Item = Image<Grayscale>;
+
+    fn forward(&mut self) -> Self::Item {
+        self.filter.conv_padded(self.image)
+    }
+}
+
+pub trait FilterImage<'a, T, const WEIGHTS: usize>
+where
+    T: Pixel,
+{
+    fn filter(&'a self, filter: &'a Filter<WEIGHTS, T, Grayscale>)
+    -> FilteredImage<'a, T, WEIGHTS>;
+}
+
+impl<'a, T, const WEIGHTS: usize> FilterImage<'a, T, WEIGHTS> for Image<T>
+where
+    T: Pixel,
+{
+    fn filter(
+        &'a self,
+        filter: &'a Filter<WEIGHTS, T, Grayscale>,
+    ) -> FilteredImage<'a, T, WEIGHTS> {
+        FilteredImage {
+            image: self,
+            filter,
+        }
+    }
+}
 
 pub fn vertical_sobel<From>() -> Filter<9, From, Grayscale>
 where
@@ -69,10 +116,6 @@ where
             _from: PhantomData,
             _to: PhantomData,
         }
-    }
-
-    pub fn forward(&self, image: &Image<From>) -> Image<To> {
-        self.conv_padded(image)
     }
 
     pub fn conv(&self, image: &Image<From>) -> Image<To> {
