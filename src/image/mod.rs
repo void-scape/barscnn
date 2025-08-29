@@ -1,7 +1,10 @@
 use self::bmp::{BmpReader, BmpWriter};
+use self::feature::FeatureMap;
+use self::filter::Filter;
 use self::pixel::{Grayscale, Pixel, PixelArray, Pixels, Rgb};
 
 pub mod bmp;
+pub mod feature;
 pub mod filter;
 pub mod linear;
 pub mod pixel;
@@ -59,20 +62,29 @@ impl<T: Pixel> Image<T> {
     pub fn pixels(&self) -> impl Iterator<Item = T> {
         self.pixels.iter().copied()
     }
+
+    pub fn filter<const WEIGHTS: usize>(
+        &self,
+        filter: &Filter<WEIGHTS, T, Grayscale>,
+    ) -> Image<Grayscale> {
+        filter.forward(self)
+    }
+
+    pub fn filter_features<const WEIGHTS: usize, const FILTERS: usize>(
+        &self,
+        filters: &[Filter<WEIGHTS, T, Grayscale>; FILTERS],
+    ) -> FeatureMap<FILTERS> {
+        FeatureMap::from_filters(self, filters)
+    }
 }
 
 impl Image<Grayscale> {
-    pub fn flatten<const LEN: usize>(&self) -> PixelArray<LEN> {
-        if self.pixels.len() != LEN {
-            panic!(
-                "called `Image::flatten` with the incorrect `LEN`, expected {}, got {LEN}",
-                self.pixels.len()
-            );
-        }
+    pub fn max_pool(&self, size: usize) -> Self {
+        pool::max_pool(size, self)
+    }
 
-        let mut arr = [0.0; LEN];
-        arr.copy_from_slice(self.pixels.as_slice());
-        PixelArray::new(arr)
+    pub fn flatten<const LEN: usize>(&self) -> PixelArray<LEN> {
+        linear::flatten(self)
     }
 }
 

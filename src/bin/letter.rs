@@ -7,19 +7,37 @@ fn main() {
     let image = image::grayscale_from_bmp(&bmp).unwrap();
     assert_eq!(image.width(), 28);
     assert_eq!(image.height(), 28);
-    let filter = image::filter::gaussian_blur_3x3();
 
-    let filtered = filter.conv_padded(&image);
-    let pooled = image::pool::max_pool(2, &filtered);
+    for _ in 0..5 {
+        let filters = [image::filter::gaussian_blur_3x3(); 8];
+        const INPUT: usize = 14 * 14 * 8;
+        const OUTPUT: usize = 26;
+        let fc = image::linear::FullyConnected::<INPUT, OUTPUT>::glorot();
 
-    const INPUT: usize = 14 * 14;
-    const OUTPUT: usize = 26;
-
-    let pixels = pooled.flatten::<INPUT>();
-    let reduce = image::linear::Reduce::new([[0.0; INPUT]; OUTPUT], [0.0; OUTPUT]);
-
-    let reduced = reduce.forward(&pixels);
-    let softmax = image::linear::softmax(&reduced);
-
-    println!("{softmax:#?}");
+        let iter = 100;
+        let mut acc = 0;
+        let mut loss = 0.0;
+        for _ in 0..iter {
+            let result = image
+                .filter_features(&filters)
+                .max_pool(2)
+                .flatten::<INPUT>()
+                .fully_connected(&fc)
+                .softmax();
+            acc += (result
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| a.total_cmp(b))
+                .unwrap()
+                .0
+                == 0) as u32;
+            loss += -result[0].ln();
+        }
+        println!(
+            "[Iterations {}]\tAccuracy: {:.2}%\t| Loss: {:.2}",
+            iter,
+            acc as f32 / iter as f32 * 100.0,
+            loss / iter as f32,
+        );
+    }
 }

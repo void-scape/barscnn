@@ -5,12 +5,12 @@ use crate::image::pixel::Pixels;
 use super::Image;
 use super::pixel::{Grayscale, Pixel};
 
-pub fn vertical_sobel<From>() -> Filter<From, Grayscale>
+pub fn vertical_sobel<From>() -> Filter<9, From, Grayscale>
 where
     From: Pixel,
 {
     #[rustfmt::skip]
-    let weights = vec![
+    let weights = [
         -1.0, 0.0, 1.0,
         -2.0, 0.0, 2.0,
         -1.0, 0.0, 1.0,
@@ -19,12 +19,12 @@ where
     Filter::new(weights)
 }
 
-pub fn horizontal_sobel<From>() -> Filter<From, Grayscale>
+pub fn horizontal_sobel<From>() -> Filter<9, From, Grayscale>
 where
     From: Pixel,
 {
     #[rustfmt::skip]
-    let weights = vec![
+    let weights = [
         -1.0, -2.0, -1.0,
          0.0,  0.0,  0.0,
          1.0,  2.0,  1.0,
@@ -33,7 +33,7 @@ where
     Filter::new(weights)
 }
 
-pub fn gaussian_blur_3x3<From>() -> Filter<From, From>
+pub fn gaussian_blur_3x3<From>() -> Filter<9, From, From>
 where
     From: Pixel,
 {
@@ -47,21 +47,20 @@ where
     Filter::new(weights.map(|v| v / 16.0))
 }
 
-#[derive(Debug)]
-pub struct Filter<From, To> {
+#[derive(Debug, Clone, Copy)]
+pub struct Filter<const WEIGHTS: usize, From, To> {
     size: u32,
-    weights: Vec<f32>,
+    weights: [f32; WEIGHTS],
     _from: PhantomData<From>,
     _to: PhantomData<To>,
 }
 
-impl<From, To> Filter<From, To>
+impl<const WEIGHTS: usize, From, To> Filter<WEIGHTS, From, To>
 where
     From: Pixel,
     To: Pixel,
 {
-    pub fn new(weights: impl IntoIterator<Item = f32>) -> Self {
-        let weights = weights.into_iter().collect::<Vec<_>>();
+    pub fn new(weights: [f32; WEIGHTS]) -> Self {
         assert_eq!((weights.len() as f32).sqrt().fract(), 0.0);
 
         Self {
@@ -70,6 +69,10 @@ where
             _from: PhantomData,
             _to: PhantomData,
         }
+    }
+
+    pub fn forward(&self, image: &Image<From>) -> Image<To> {
+        self.conv_padded(image)
     }
 
     pub fn conv(&self, image: &Image<From>) -> Image<To> {
@@ -82,7 +85,10 @@ where
     }
 }
 
-fn conv<From, To>(input: &Image<From>, filter: &Filter<From, To>) -> Image<To>
+fn conv<const WEIGHTS: usize, From, To>(
+    input: &Image<From>,
+    filter: &Filter<WEIGHTS, From, To>,
+) -> Image<To>
 where
     From: Pixel,
     To: Pixel,
@@ -128,7 +134,11 @@ where
     output
 }
 
-fn conv_padded<From, To>(input: &Image<From>, filter: &Filter<From, To>, padding: u32) -> Image<To>
+fn conv_padded<const WEIGHTS: usize, From, To>(
+    input: &Image<From>,
+    filter: &Filter<WEIGHTS, From, To>,
+    padding: u32,
+) -> Image<To>
 where
     From: Pixel,
     To: Pixel,
@@ -216,7 +226,7 @@ mod test {
             ]),
         };
 
-        let filter = Filter::<f32, Grayscale>::new(vec![1.0, -1.0, -1.0, 1.0]);
+        let filter = Filter::<_, f32, Grayscale>::new([1.0, -1.0, -1.0, 1.0]);
         let result = filter.conv(&image);
 
         // Expected dimensions: (10-2+1) x (3-2+1) = 9x2
@@ -273,7 +283,7 @@ mod test {
             ]),
         };
 
-        let filter = Filter::<f32, Grayscale>::new([2.0]);
+        let filter = Filter::<_, f32, Grayscale>::new([2.0]);
         let result = filter.conv(&image);
 
         // Expected dimensions: (4-1+1) x (4-1+1) = 4x4
@@ -313,7 +323,7 @@ mod test {
         };
 
         // Use a simple 3x3 box filter (all weights = 1/9)
-        let filter = Filter::<f32, Grayscale>::new([1.0 / 9.0; 9]);
+        let filter = Filter::<_, f32, Grayscale>::new([1.0 / 9.0; 9]);
         let result = filter.conv(&image);
 
         // Expected dimensions: (7-3+1) x (7-3+1) = 5x5
@@ -389,7 +399,7 @@ mod test {
             ]),
         };
 
-        let filter = Filter::<f32, Grayscale>::new([1.0 / 9.0; 9]);
+        let filter = Filter::<_, f32, Grayscale>::new([1.0 / 9.0; 9]);
 
         let conv_result = filter.conv(&padded_image);
         let conv_padded_result = filter.conv_padded(&normal_image);

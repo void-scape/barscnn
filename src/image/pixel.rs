@@ -1,3 +1,5 @@
+use super::linear::{self, FullyConnected};
+
 #[derive(Debug)]
 pub struct Pixels<T>(Vec<T>);
 
@@ -69,6 +71,17 @@ impl<const LEN: usize> PixelArray<LEN> {
 
     pub fn into_inner(self) -> [f32; LEN] {
         self.0
+    }
+
+    pub fn fully_connected<const OUTPUT: usize>(
+        &self,
+        fc: &FullyConnected<LEN, OUTPUT>,
+    ) -> PixelArray<OUTPUT> {
+        fc.forward(self)
+    }
+
+    pub fn softmax(&self) -> PixelArray<LEN> {
+        linear::softmax(self)
     }
 }
 
