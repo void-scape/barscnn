@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use super::Image;
 use super::feature::FeatureSet;
-use super::layer::Layer;
+use super::layer::{CachedLayer, Layer};
 use super::pixel::{Grayscale, PixelArray};
 
 #[derive(Debug)]
@@ -35,15 +35,30 @@ impl<T, const LEN: usize> Layer for Flatten<T, LEN>
 where
     T: Layer,
     T::Item: Flattenable<LEN>,
+    <T::Cached as Layer>::Item: Flattenable<LEN>,
 {
     type Item = PixelArray<LEN>;
+    type Cached = Flatten<CachedLayer<T::Cached>, LEN>;
 
-    fn forward(&mut self) -> Self::Item {
+    fn forward(&self) -> Self::Item {
         self.data.forward().flatten()
+    }
+
+    fn forward_cached(self) -> CachedLayer<Self::Cached> {
+        let data_cached = self.data.forward_cached();
+        let item = data_cached.item.clone().flatten();
+
+        CachedLayer {
+            layer: Flatten {
+                data: data_cached,
+                _len: PhantomData,
+            },
+            item,
+        }
     }
 }
 
-trait Flattenable<const LEN: usize> {
+trait Flattenable<const LEN: usize>: Clone {
     fn flatten(&self) -> PixelArray<LEN>;
 }
 

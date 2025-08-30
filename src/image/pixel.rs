@@ -1,7 +1,13 @@
-use super::layer::Layer;
+use super::layer::{CachedLayer, Layer};
 
 #[derive(Debug)]
 pub struct Pixels<T>(Vec<T>);
+
+impl<T: Clone> Clone for Pixels<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 impl<T> Pixels<T> {
     pub fn new(pixels: Vec<T>) -> Self {
@@ -41,12 +47,6 @@ impl<T> std::ops::IndexMut<usize> for Pixels<T> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct PixelArray<const LEN: usize>([f32; LEN]);
-
-impl<const LEN: usize> Default for PixelArray<LEN> {
-    fn default() -> Self {
-        Self([0.0; LEN])
-    }
-}
 
 impl<const LEN: usize> PixelArray<LEN> {
     pub fn new(pixels: [f32; LEN]) -> Self {
@@ -90,9 +90,15 @@ impl<const LEN: usize> std::ops::IndexMut<usize> for PixelArray<LEN> {
 
 impl<const LEN: usize> Layer for PixelArray<LEN> {
     type Item = Self;
+    type Cached = Self;
 
-    fn forward(&mut self) -> Self::Item {
+    fn forward(&self) -> Self::Item {
         PixelArray(self.into_inner())
+    }
+
+    fn forward_cached(self) -> CachedLayer<Self::Cached> {
+        let item = self.forward();
+        CachedLayer { layer: self, item }
     }
 }
 

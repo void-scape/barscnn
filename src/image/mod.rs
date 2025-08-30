@@ -25,6 +25,16 @@ pub struct Image<T> {
     pixels: Pixels<T>,
 }
 
+impl<T: Clone> Clone for Image<T> {
+    fn clone(&self) -> Self {
+        Self {
+            width: self.width,
+            height: self.height,
+            pixels: self.pixels.clone(),
+        }
+    }
+}
+
 impl<T: Pixel> Image<T> {
     pub fn width(&self) -> usize {
         self.width as usize

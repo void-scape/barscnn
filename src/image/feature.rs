@@ -1,48 +1,62 @@
 use super::Image;
-use super::filter::{Filter, FilterImage, FilteredImage};
-use super::layer::Layer;
-use super::pixel::{Grayscale, Pixel};
+use super::filter::{Filter, FilterData, Filterable};
+use super::layer::{CachedLayer, Layer};
+use super::pixel::Grayscale;
 
 #[derive(Debug)]
-pub struct FeatureMap<'a, Pixel, const WEIGHTS: usize, const DEPTH: usize>(
-    [FilteredImage<'a, Pixel, WEIGHTS>; DEPTH],
-);
+pub struct FeatureMap<Feature, const DEPTH: usize>([Feature; DEPTH]);
 
-pub trait FeatureMapImage<'a, T, const WEIGHTS: usize, const DEPTH: usize>
+pub trait FeatureMapData<'a, const WEIGHTS: usize, const DEPTH: usize>
 where
-    T: Pixel,
+    Self: Filterable,
 {
     fn feature_map(
         &'a self,
-        filters: &'a [Filter<WEIGHTS, T, Grayscale>; DEPTH],
-    ) -> FeatureMap<'a, T, WEIGHTS, DEPTH>;
+        filters: &'a [Filter<WEIGHTS, Grayscale, Grayscale>; DEPTH],
+    ) -> FeatureMap<FilterData<'a, &'a Self, WEIGHTS>, DEPTH>;
 }
 
-impl<'a, T, const WEIGHTS: usize, const DEPTH: usize> FeatureMapImage<'a, T, WEIGHTS, DEPTH>
-    for Image<T>
+impl<'a, const WEIGHTS: usize, const DEPTH: usize> FeatureMapData<'a, WEIGHTS, DEPTH>
+    for Image<Grayscale>
 where
-    T: Pixel,
+    Self: Filterable,
 {
     fn feature_map(
         &'a self,
-        filters: &'a [Filter<WEIGHTS, T, Grayscale>; DEPTH],
-    ) -> FeatureMap<'a, T, WEIGHTS, DEPTH> {
-        FeatureMap(filters.each_ref().map(|filter| self.filter(filter)))
+        filters: &'a [Filter<WEIGHTS, Grayscale, Grayscale>; DEPTH],
+    ) -> FeatureMap<FilterData<'a, &'a Self, WEIGHTS>, DEPTH> {
+        FeatureMap(
+            filters
+                .each_ref()
+                .map(|filter| FilterData::new(self, filter)),
+        )
     }
 }
 
-impl<'a, T, const WEIGHTS: usize, const DEPTH: usize> Layer for FeatureMap<'a, T, WEIGHTS, DEPTH>
+impl<T, const DEPTH: usize> Layer for FeatureMap<T, DEPTH>
 where
-    T: Pixel,
+    T: Layer<Item = Image<Grayscale>>,
+    T::Cached: Layer<Item = Image<Grayscale>>,
 {
     type Item = FeatureSet<DEPTH>;
+    type Cached = FeatureMap<CachedLayer<T::Cached>, DEPTH>;
 
-    fn forward(&mut self) -> Self::Item {
-        FeatureSet(self.0.each_mut().map(|img| img.forward()))
+    fn forward(&self) -> Self::Item {
+        FeatureSet(self.0.each_ref().map(|img| img.forward()))
+    }
+
+    fn forward_cached(self) -> CachedLayer<Self::Cached> {
+        let data_cached = self.0.map(|d| d.forward_cached());
+        let item = FeatureSet(data_cached.each_ref().map(|filter| filter.forward()));
+
+        CachedLayer {
+            layer: FeatureMap(data_cached),
+            item,
+        }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FeatureSet<const DEPTH: usize>([Image<Grayscale>; DEPTH]);
 
 impl<const DEPTH: usize> FeatureSet<DEPTH> {

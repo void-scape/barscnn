@@ -3,51 +3,92 @@ use std::marker::PhantomData;
 use crate::image::pixel::Pixels;
 
 use super::Image;
-use super::layer::Layer;
+use super::layer::{CachedLayer, Layer};
 use super::pixel::{Grayscale, Pixel};
 
 #[derive(Debug)]
-pub struct FilteredImage<'a, Pixel, const WEIGHTS: usize> {
-    image: &'a Image<Pixel>,
-    filter: &'a Filter<WEIGHTS, Pixel, Grayscale>,
+pub struct FilterData<'a, Data, const WEIGHTS: usize> {
+    data: Data,
+    filter: &'a Filter<WEIGHTS, Grayscale, Grayscale>,
 }
 
-impl<'a, const WEIGHTS: usize, Pixel> FilteredImage<'a, Pixel, WEIGHTS> {
-    pub fn new(image: &'a Image<Pixel>, filter: &'a Filter<WEIGHTS, Pixel, Grayscale>) -> Self {
-        Self { image, filter }
+impl<'a, Data, const WEIGHTS: usize> FilterData<'a, Data, WEIGHTS> {
+    pub fn new(data: Data, filter: &'a Filter<WEIGHTS, Grayscale, Grayscale>) -> Self {
+        Self { data, filter }
     }
 }
 
-impl<'a, T, const WEIGHTS: usize> Layer for FilteredImage<'a, T, WEIGHTS>
+impl<'a, T, const WEIGHTS: usize> Layer for FilterData<'a, T, WEIGHTS>
 where
-    T: Pixel,
+    T: Layer,
+    T::Item: Filterable,
 {
     type Item = Image<Grayscale>;
+    type Cached = Self;
 
-    fn forward(&mut self) -> Self::Item {
-        self.filter.conv_padded(self.image)
+    fn forward(&self) -> Self::Item {
+        self.data.forward().filter(self.filter)
+    }
+
+    fn forward_cached(self) -> CachedLayer<Self::Cached> {
+        let item = self.forward();
+        CachedLayer { layer: self, item }
     }
 }
 
-pub trait FilterImage<'a, T, const WEIGHTS: usize>
-where
-    T: Pixel,
-{
-    fn filter(&'a self, filter: &'a Filter<WEIGHTS, T, Grayscale>)
-    -> FilteredImage<'a, T, WEIGHTS>;
+pub trait Filterable: Clone {
+    fn filter<const WEIGHTS: usize>(
+        &self,
+        filter: &Filter<WEIGHTS, Grayscale, Grayscale>,
+    ) -> Image<Grayscale>;
 }
 
-impl<'a, T, const WEIGHTS: usize> FilterImage<'a, T, WEIGHTS> for Image<T>
-where
-    T: Pixel,
-{
-    fn filter(
-        &'a self,
-        filter: &'a Filter<WEIGHTS, T, Grayscale>,
-    ) -> FilteredImage<'a, T, WEIGHTS> {
-        FilteredImage {
-            image: self,
-            filter,
+impl Filterable for Image<Grayscale> {
+    fn filter<const WEIGHTS: usize>(
+        &self,
+        filter: &Filter<WEIGHTS, Grayscale, Grayscale>,
+    ) -> Image<Grayscale> {
+        filter.conv_padded(self)
+    }
+}
+
+impl Layer for Image<Grayscale> {
+    type Item = Self;
+    type Cached = Self;
+
+    fn forward(&self) -> Self::Item {
+        self.clone()
+    }
+
+    fn forward_cached(self) -> CachedLayer<Self::Cached> {
+        CachedLayer {
+            layer: self.clone(),
+            item: self,
+        }
+    }
+}
+
+impl Filterable for &Image<Grayscale> {
+    fn filter<const WEIGHTS: usize>(
+        &self,
+        filter: &Filter<WEIGHTS, Grayscale, Grayscale>,
+    ) -> Image<Grayscale> {
+        filter.conv_padded(self)
+    }
+}
+
+impl Layer for &Image<Grayscale> {
+    type Item = Self;
+    type Cached = Self;
+
+    fn forward(&self) -> Self::Item {
+        self
+    }
+
+    fn forward_cached(self) -> CachedLayer<Self::Cached> {
+        CachedLayer {
+            layer: self,
+            item: self,
         }
     }
 }

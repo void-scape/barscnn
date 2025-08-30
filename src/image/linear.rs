@@ -1,4 +1,4 @@
-use super::layer::Layer;
+use super::layer::{CachedLayer, Layer};
 use super::pixel::PixelArray;
 
 #[derive(Debug)]
@@ -32,11 +32,26 @@ where
 impl<'a, T, const INPUT: usize, const OUTPUT: usize> Layer for FullyConnected<'a, T, INPUT, OUTPUT>
 where
     T: Layer<Item = PixelArray<INPUT>>,
+    T::Cached: Layer<Item = PixelArray<INPUT>>,
 {
     type Item = PixelArray<OUTPUT>;
+    type Cached = FullyConnected<'a, CachedLayer<T::Cached>, INPUT, OUTPUT>;
 
-    fn forward(&mut self) -> Self::Item {
+    fn forward(&self) -> Self::Item {
         fully_connected(self.fc, self.data.forward().into_inner())
+    }
+
+    fn forward_cached(self) -> CachedLayer<Self::Cached> {
+        let data_cached = self.data.forward_cached();
+        let item = fully_connected(self.fc, data_cached.item.into_inner());
+
+        CachedLayer {
+            layer: FullyConnected {
+                fc: self.fc,
+                data: data_cached,
+            },
+            item,
+        }
     }
 }
 
@@ -135,11 +150,23 @@ where
 impl<T, const OUTPUT: usize> Layer for Softmax<T>
 where
     T: Layer<Item = PixelArray<OUTPUT>>,
+    T::Cached: Layer<Item = PixelArray<OUTPUT>>,
 {
     type Item = [f32; OUTPUT];
+    type Cached = Softmax<CachedLayer<T::Cached>>;
 
-    fn forward(&mut self) -> Self::Item {
+    fn forward(&self) -> Self::Item {
         softmax(self.data.forward().into_inner())
+    }
+
+    fn forward_cached(self) -> CachedLayer<Self::Cached> {
+        let data_cached = self.data.forward_cached();
+        let item = softmax(data_cached.item.into_inner());
+
+        CachedLayer {
+            layer: Softmax { data: data_cached },
+            item,
+        }
     }
 }
 

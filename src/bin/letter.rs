@@ -1,5 +1,5 @@
 use barscnn::image;
-use barscnn::image::feature::FeatureMapImage;
+use barscnn::image::feature::FeatureMapData;
 use barscnn::image::flatten::FlattenData;
 use barscnn::image::layer::Layer;
 use barscnn::image::linear::{FullyConnectedData, SoftmaxData};
@@ -23,7 +23,7 @@ fn main() {
             const OUTPUT: usize = 26;
             let fc = image::linear::FcWeights::<INPUT, OUTPUT>::glorot();
 
-            let mut cnn = image
+            let cnn = image
                 .feature_map(&filters)
                 .max_pool(2)
                 .flatten()

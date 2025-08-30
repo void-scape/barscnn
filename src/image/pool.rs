@@ -2,7 +2,7 @@ use crate::image::pixel::Pixels;
 
 use super::Image;
 use super::feature::FeatureSet;
-use super::layer::Layer;
+use super::layer::{CachedLayer, Layer};
 use super::pixel::{Grayscale, Pixel};
 
 #[derive(Debug)]
@@ -32,15 +32,30 @@ impl<T> Layer for MaxPool<T>
 where
     T: Layer,
     T::Item: MaxPoolable,
+    <T::Cached as Layer>::Item: MaxPoolable,
 {
     type Item = T::Item;
+    type Cached = MaxPool<CachedLayer<T::Cached>>;
 
-    fn forward(&mut self) -> Self::Item {
+    fn forward(&self) -> Self::Item {
         self.data.forward().max_pool(self.size)
+    }
+
+    fn forward_cached(self) -> CachedLayer<Self::Cached> {
+        let data_cached = self.data.forward_cached();
+        let item = data_cached.item.clone().max_pool(self.size);
+
+        CachedLayer {
+            layer: MaxPool {
+                size: self.size,
+                data: data_cached,
+            },
+            item,
+        }
     }
 }
 
-trait MaxPoolable {
+trait MaxPoolable: Clone {
     fn max_pool(self, size: usize) -> Self;
 }
 
