@@ -2,72 +2,88 @@ use crate::image::pixel::Pixels;
 
 use super::Image;
 use super::feature::FeatureSet;
-use super::layer::{CachedLayer, Layer};
+use super::layer::{BackPropagation, Layer};
 use super::pixel::{Grayscale, Pixel};
 
 #[derive(Debug)]
-pub struct MaxPool<Data> {
+pub struct MaxPool<Data, Input> {
     size: usize,
     data: Data,
+    input: Input,
 }
 
-pub trait MaxPoolData
+pub trait MaxPoolData<Input>
 where
     Self: Sized,
 {
-    fn max_pool(self, size: usize) -> MaxPool<Self>;
+    fn max_pool(self, size: usize) -> MaxPool<Self, Input>;
 }
 
-impl<T> MaxPoolData for T
+impl<T, Input> MaxPoolData<Input> for T
 where
-    T: Layer,
+    T: Layer<Item = Input>,
     T::Item: MaxPoolable,
 {
-    fn max_pool(self, size: usize) -> MaxPool<Self> {
-        MaxPool { size, data: self }
-    }
-}
-
-impl<T> Layer for MaxPool<T>
-where
-    T: Layer,
-    T::Item: MaxPoolable,
-    <T::Cached as Layer>::Item: MaxPoolable,
-{
-    type Item = T::Item;
-    type Cached = MaxPool<CachedLayer<T::Cached>>;
-
-    fn forward(&self) -> Self::Item {
-        self.data.forward().max_pool(self.size)
-    }
-
-    fn forward_cached(self) -> CachedLayer<Self::Cached> {
-        let data_cached = self.data.forward_cached();
-        let item = data_cached.item.clone().max_pool(self.size);
-
-        CachedLayer {
-            layer: MaxPool {
-                size: self.size,
-                data: data_cached,
-            },
-            item,
+    fn max_pool(self, size: usize) -> MaxPool<Self, T::Item> {
+        MaxPool {
+            size,
+            data: self,
+            input: T::Item::default(),
         }
     }
 }
 
-trait MaxPoolable: Clone {
+impl<T, Input> Layer for MaxPool<T, Input>
+where
+    T: Layer<Item = Input>,
+    T::Item: MaxPoolable,
+{
+    type Item = T::Item;
+
+    fn forward(&mut self) -> Self::Item {
+        let input = self.data.forward();
+        self.input = input.clone();
+        input.max_pool(self.size)
+    }
+}
+
+impl<T, Input> BackPropagation for MaxPool<T, Input>
+where
+    T: Layer<Item = Input> + BackPropagation<Gradient = Input>,
+    Input: MaxPoolable,
+{
+    type Gradient = T::Item;
+
+    fn backprop(&mut self, output_gradient: Self::Gradient, learning_rate: f32) {
+        let unmaxed = <Input as MaxPoolable>::unmax_pool(&self.input, output_gradient, self.size);
+        self.data.backprop(unmaxed, learning_rate);
+    }
+}
+
+trait MaxPoolable: Default + Clone {
     fn max_pool(self, size: usize) -> Self;
+    fn unmax_pool(original: &Self, pooled: Self, size: usize) -> Self;
 }
 
 impl MaxPoolable for Image<Grayscale> {
     fn max_pool(self, size: usize) -> Self {
         max_pool(size, &self)
     }
+
+    fn unmax_pool(original: &Self, pooled: Self, size: usize) -> Self {
+        unmax_pool(original, &pooled, size)
+    }
 }
 
 impl<const DEPTH: usize> MaxPoolable for FeatureSet<DEPTH> {
     fn max_pool(self, size: usize) -> Self {
         FeatureSet::new(self.each_ref().map(|img| max_pool(size, img)))
+    }
+
+    fn unmax_pool(original: &Self, pooled: Self, size: usize) -> Self {
+        Self::new(std::array::from_fn(|i| {
+            unmax_pool(&original[i], &pooled[i], size)
+        }))
     }
 }
 
@@ -114,6 +130,43 @@ where
     output
 }
 
+fn unmax_pool(original: &Image<f32>, pooled: &Image<f32>, size: usize) -> Image<f32> {
+    let width = original.width / size as u32;
+    let height = original.height / size as u32;
+    let mut output = Image {
+        width: original.width,
+        height: original.height,
+        pixels: Pixels::new(vec![
+            Grayscale::default();
+            original.width as usize * original.height as usize
+        ]),
+    };
+
+    let pxls = original.pixels.as_slice();
+    for ph in 0..height as usize {
+        for pw in 0..width as usize {
+            let h = ph * size;
+            let w = pw * size;
+
+            let max = (0..size)
+                .map(|ph| {
+                    (0..size).map(move |pw| {
+                        let index = (h + ph) * original.width as usize + w + pw;
+                        (index, pxls[index])
+                    })
+                })
+                .flatten()
+                .max_by(|(_, a), (_, b)| a.total_cmp(b))
+                .map(|(i, _)| i)
+                .unwrap();
+
+            output.pixels[max] = pooled.pixels[ph * width as usize + pw];
+        }
+    }
+
+    output
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -153,5 +206,17 @@ mod test {
         assert_eq!(result.height, 1);
         assert_eq!(result.pixels.len(), 2);
         assert_eq!(result.pixels.as_slice(), &[0.3, 0.5]);
+
+        let unmax = unmax_pool(&image, &result, 2);
+
+        #[rustfmt::skip]
+        assert_eq!(
+            unmax.pixels.as_slice(),
+            &[
+                0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.3, 0.0, 0.5, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0,
+            ]
+        );
     }
 }

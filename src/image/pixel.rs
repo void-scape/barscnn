@@ -1,4 +1,4 @@
-use super::layer::{CachedLayer, Layer};
+use super::layer::Layer;
 
 #[derive(Debug)]
 pub struct Pixels<T>(Vec<T>);
@@ -90,15 +90,9 @@ impl<const LEN: usize> std::ops::IndexMut<usize> for PixelArray<LEN> {
 
 impl<const LEN: usize> Layer for PixelArray<LEN> {
     type Item = Self;
-    type Cached = Self;
 
-    fn forward(&self) -> Self::Item {
+    fn forward(&mut self) -> Self::Item {
         PixelArray(self.into_inner())
-    }
-
-    fn forward_cached(self) -> CachedLayer<Self::Cached> {
-        let item = self.forward();
-        CachedLayer { layer: self, item }
     }
 }
 

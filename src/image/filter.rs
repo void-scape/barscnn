@@ -3,40 +3,157 @@ use std::marker::PhantomData;
 use crate::image::pixel::Pixels;
 
 use super::Image;
-use super::layer::{CachedLayer, Layer};
+use super::layer::{BackPropagation, Layer};
 use super::pixel::{Grayscale, Pixel};
 
 #[derive(Debug)]
-pub struct FilterData<'a, Data, const WEIGHTS: usize> {
+pub struct FilterData<'a, Data, Input, const WEIGHTS: usize> {
     data: Data,
-    filter: &'a Filter<WEIGHTS, Grayscale, Grayscale>,
+    input: Option<Input>,
+    filter: &'a mut Filter<WEIGHTS, Grayscale, Grayscale>,
 }
 
-impl<'a, Data, const WEIGHTS: usize> FilterData<'a, Data, WEIGHTS> {
-    pub fn new(data: Data, filter: &'a Filter<WEIGHTS, Grayscale, Grayscale>) -> Self {
-        Self { data, filter }
+impl<'a, Data, Input, const WEIGHTS: usize> FilterData<'a, Data, Input, WEIGHTS> {
+    pub fn new(data: Data, filter: &'a mut Filter<WEIGHTS, Grayscale, Grayscale>) -> Self {
+        Self {
+            data,
+            filter,
+            input: None,
+        }
     }
 }
 
-impl<'a, T, const WEIGHTS: usize> Layer for FilterData<'a, T, WEIGHTS>
+impl<'a, T, Input, const WEIGHTS: usize> Layer for FilterData<'a, T, Input, WEIGHTS>
 where
-    T: Layer,
+    T: Layer<Item = Input>,
     T::Item: Filterable,
 {
     type Item = Image<Grayscale>;
-    type Cached = Self;
 
-    fn forward(&self) -> Self::Item {
-        self.data.forward().filter(self.filter)
+    fn forward(&mut self) -> Self::Item {
+        let input = self.data.forward();
+        self.input = Some(input.clone());
+        input.filter(self.filter)
     }
+}
 
-    fn forward_cached(self) -> CachedLayer<Self::Cached> {
-        let item = self.forward();
-        CachedLayer { layer: self, item }
+impl<'a, T, Input, const WEIGHTS: usize> BackPropagation for FilterData<'a, T, Input, WEIGHTS>
+where
+    Input: Filterable,
+{
+    type Gradient = Image<Grayscale>;
+
+    fn backprop(&mut self, output_gradient: Self::Gradient, learning_rate: f32) {
+        let input = self
+            .input
+            .as_ref()
+            .expect("Forward pass must be called before backprop");
+
+        let mut filter_gradients = [0.0f32; WEIGHTS];
+        let filter_size = self.filter.size as usize;
+        let height = output_gradient.height() as usize;
+        let width = output_gradient.width() as usize;
+
+        for y in 0..height {
+            for x in 0..width {
+                let g = output_gradient.pixels[y * width + x];
+
+                for fy in 0..filter_size {
+                    for fx in 0..filter_size {
+                        let weight_idx = fy * filter_size + fx;
+                        if weight_idx < WEIGHTS {
+                            let input_x = x + fx;
+                            let input_y = y + fy;
+
+                            if input_x < input.width() && input_y < input.height() {
+                                let input_val = input.pixels()[input_y * input.width() + input_x];
+                                filter_gradients[weight_idx] += input_val * g;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for i in 0..WEIGHTS {
+            self.filter.weights[i] -= learning_rate * filter_gradients[i];
+        }
+
+        let mut bias_gradient = 0.0;
+        for y in 0..height {
+            for x in 0..width {
+                bias_gradient += output_gradient.pixels[y * width + x];
+            }
+        }
+        self.filter.bias -= learning_rate * bias_gradient;
+
+        // // Step 2: Compute gradients for previous layer (input gradients)
+        // // This is the "transposed convolution" operation
+        // let input_height = input.height() as usize;
+        // let input_width = input.width() as usize;
+        //
+        // // Create input gradient image (same size as input)
+        // let mut input_gradients = vec![vec![0.0f32; input_width]; input_height];
+        //
+        // // For each input position, figure out which outputs it contributed to
+        // for in_y in 0..input_height {
+        //     for in_x in 0..input_width {
+        //         let mut gradient_sum = 0.0;
+        //
+        //         // Check all filter positions and output positions
+        //         for fy in 0..filter_size {
+        //             for fx in 0..filter_size {
+        //                 let weight_idx = fy * filter_size + fx;
+        //                 if weight_idx < WEIGHTS {
+        //                     // Calculate which output position this input->filter combination affects
+        //                     if in_x >= fx && in_y >= fy {
+        //                         let out_x = in_x - fx;
+        //                         let out_y = in_y - fy;
+        //
+        //                         // Check if this output position exists
+        //                         if out_x < output_width && out_y < output_height {
+        //                             let output_grad = output_gradient
+        //                                 .get_pixel(out_x as u32, out_y as u32)
+        //                                 .intensity();
+        //                             gradient_sum += self.filter.weights[weight_idx] * output_grad;
+        //                         }
+        //                     }
+        //                 }
+        //             }
+        //         }
+        //
+        //         input_gradients[in_y][in_x] = gradient_sum;
+        //     }
+        // }
+        //
+        // // Step 3: Send gradients to previous layer
+        // // Convert gradient matrix back to Image format and pass to previous layer
+        // // (This would typically involve calling backprop on self.data with the input gradients)
+        //
+        // // Note: In a complete implementation, you'd need to:
+        // // 1. Convert input_gradients back to Image<Grayscale> format
+        // // 2. Call self.data.backprop(input_gradient_image) if T implements BackPropagation
+        //
+        // // For demonstration, let's show the gradient values
+        // println!("Filter gradients: {:?}", filter_gradients);
+        // println!("Input gradient shape: {}x{}", input_height, input_width);
+        // println!("Sample input gradients (top-left 3x3):");
+        // for y in 0..3.min(input_height) {
+        //     for x in 0..3.min(input_width) {
+        //         print!("{:6.3} ", input_gradients[y][x]);
+        //     }
+        //     println!();
+        // }
     }
 }
 
 pub trait Filterable: Clone {
+    fn width(&self) -> usize;
+
+    fn height(&self) -> usize;
+
+    fn pixels(&self) -> &[Grayscale];
+
     fn filter<const WEIGHTS: usize>(
         &self,
         filter: &Filter<WEIGHTS, Grayscale, Grayscale>,
@@ -44,6 +161,18 @@ pub trait Filterable: Clone {
 }
 
 impl Filterable for Image<Grayscale> {
+    fn width(&self) -> usize {
+        self.width as usize
+    }
+
+    fn height(&self) -> usize {
+        self.height as usize
+    }
+
+    fn pixels(&self) -> &[Grayscale] {
+        self.pixels.as_slice()
+    }
+
     fn filter<const WEIGHTS: usize>(
         &self,
         filter: &Filter<WEIGHTS, Grayscale, Grayscale>,
@@ -54,21 +183,25 @@ impl Filterable for Image<Grayscale> {
 
 impl Layer for Image<Grayscale> {
     type Item = Self;
-    type Cached = Self;
 
-    fn forward(&self) -> Self::Item {
+    fn forward(&mut self) -> Self::Item {
         self.clone()
-    }
-
-    fn forward_cached(self) -> CachedLayer<Self::Cached> {
-        CachedLayer {
-            layer: self.clone(),
-            item: self,
-        }
     }
 }
 
 impl Filterable for &Image<Grayscale> {
+    fn width(&self) -> usize {
+        self.width as usize
+    }
+
+    fn height(&self) -> usize {
+        self.height as usize
+    }
+
+    fn pixels(&self) -> &[Grayscale] {
+        self.pixels.as_slice()
+    }
+
     fn filter<const WEIGHTS: usize>(
         &self,
         filter: &Filter<WEIGHTS, Grayscale, Grayscale>,
@@ -79,18 +212,17 @@ impl Filterable for &Image<Grayscale> {
 
 impl Layer for &Image<Grayscale> {
     type Item = Self;
-    type Cached = Self;
 
-    fn forward(&self) -> Self::Item {
+    fn forward(&mut self) -> Self::Item {
         self
     }
+}
 
-    fn forward_cached(self) -> CachedLayer<Self::Cached> {
-        CachedLayer {
-            layer: self,
-            item: self,
-        }
-    }
+pub fn uniform_3x3<From>() -> Filter<9, From, Grayscale>
+where
+    From: Pixel,
+{
+    Filter::new([1.0 / 3.0; 9])
 }
 
 pub fn vertical_sobel<From>() -> Filter<9, From, Grayscale>
@@ -139,6 +271,7 @@ where
 pub struct Filter<const WEIGHTS: usize, From, To> {
     size: u32,
     weights: [f32; WEIGHTS],
+    bias: f32,
     _from: PhantomData<From>,
     _to: PhantomData<To>,
 }
@@ -154,6 +287,7 @@ where
         Self {
             size: weights.len().isqrt() as u32,
             weights,
+            bias: 0.0,
             _from: PhantomData,
             _to: PhantomData,
         }
@@ -211,7 +345,8 @@ where
                     fi += 1;
                 }
             }
-            output.pixels[h * width as usize + w] = To::from_linear_rgb(result);
+            output.pixels[h * width as usize + w] =
+                To::from_linear_rgb(result.map(|v| v + filter.bias));
         }
     }
 

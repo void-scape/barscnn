@@ -1,10 +1,11 @@
-use super::layer::{CachedLayer, Layer};
+use super::layer::{BackPropagation, Layer};
 use super::pixel::PixelArray;
 
 #[derive(Debug)]
 pub struct FullyConnected<'a, Data, const INPUT: usize, const OUTPUT: usize> {
     data: Data,
-    fc: &'a FcWeights<INPUT, OUTPUT>,
+    input: [f32; INPUT],
+    fc: &'a mut FcWeights<INPUT, OUTPUT>,
 }
 
 pub trait FullyConnectedData<'a, const INPUT: usize, const OUTPUT: usize>
@@ -13,7 +14,7 @@ where
 {
     fn fully_connected(
         self,
-        fc: &'a FcWeights<INPUT, OUTPUT>,
+        fc: &'a mut FcWeights<INPUT, OUTPUT>,
     ) -> FullyConnected<'a, Self, INPUT, OUTPUT>;
 }
 
@@ -23,35 +24,55 @@ where
 {
     fn fully_connected(
         self,
-        fc: &'a FcWeights<INPUT, OUTPUT>,
+        fc: &'a mut FcWeights<INPUT, OUTPUT>,
     ) -> FullyConnected<'a, Self, INPUT, OUTPUT> {
-        FullyConnected { data: self, fc }
+        FullyConnected {
+            data: self,
+            input: [0.0; INPUT],
+            fc,
+        }
     }
 }
 
 impl<'a, T, const INPUT: usize, const OUTPUT: usize> Layer for FullyConnected<'a, T, INPUT, OUTPUT>
 where
     T: Layer<Item = PixelArray<INPUT>>,
-    T::Cached: Layer<Item = PixelArray<INPUT>>,
 {
     type Item = PixelArray<OUTPUT>;
-    type Cached = FullyConnected<'a, CachedLayer<T::Cached>, INPUT, OUTPUT>;
 
-    fn forward(&self) -> Self::Item {
-        fully_connected(self.fc, self.data.forward().into_inner())
+    fn forward(&mut self) -> Self::Item {
+        self.input = self.data.forward().into_inner();
+        fully_connected(self.fc, self.input)
     }
+}
 
-    fn forward_cached(self) -> CachedLayer<Self::Cached> {
-        let data_cached = self.data.forward_cached();
-        let item = fully_connected(self.fc, data_cached.item.into_inner());
+impl<'a, Data, const INPUT: usize, const OUTPUT: usize> BackPropagation
+    for FullyConnected<'a, Data, INPUT, OUTPUT>
+where
+    Data: BackPropagation<Gradient = PixelArray<INPUT>>,
+{
+    type Gradient = PixelArray<OUTPUT>;
 
-        CachedLayer {
-            layer: FullyConnected {
-                fc: self.fc,
-                data: data_cached,
-            },
-            item,
+    fn backprop(&mut self, output_gradient: Self::Gradient, learning_rate: f32) {
+        for r in 0..OUTPUT {
+            for c in 0..INPUT {
+                let wgradient = self.input[c] * output_gradient[r];
+                self.fc.weights[r][c] -= wgradient * learning_rate;
+            }
         }
+
+        for r in 0..OUTPUT {
+            self.fc.bias[r] -= output_gradient[r] * learning_rate;
+        }
+
+        let mut out = [0.0; INPUT];
+        for r in 0..OUTPUT {
+            for c in 0..INPUT {
+                out[c] += self.fc.weights[r][c] * output_gradient[r];
+            }
+        }
+
+        self.data.backprop(PixelArray::new(out), learning_rate);
     }
 }
 
@@ -131,6 +152,17 @@ pub struct Softmax<Data> {
     data: Data,
 }
 
+impl<Data, const LEN: usize> Softmax<Data>
+where
+    Self: BackPropagation<Gradient = PixelArray<LEN>>,
+{
+    pub fn backprop_index(&mut self, index: usize, mut gradients: [f32; LEN], learning_rate: f32) {
+        assert!(index < LEN);
+        gradients[index] -= 1.0;
+        self.backprop(PixelArray::new(gradients), learning_rate);
+    }
+}
+
 pub trait SoftmaxData
 where
     Self: Sized,
@@ -150,23 +182,25 @@ where
 impl<T, const OUTPUT: usize> Layer for Softmax<T>
 where
     T: Layer<Item = PixelArray<OUTPUT>>,
-    T::Cached: Layer<Item = PixelArray<OUTPUT>>,
 {
     type Item = [f32; OUTPUT];
-    type Cached = Softmax<CachedLayer<T::Cached>>;
 
-    fn forward(&self) -> Self::Item {
+    fn forward(&mut self) -> Self::Item {
         softmax(self.data.forward().into_inner())
     }
+}
 
-    fn forward_cached(self) -> CachedLayer<Self::Cached> {
-        let data_cached = self.data.forward_cached();
-        let item = softmax(data_cached.item.into_inner());
+impl<T, const OUTPUT: usize> BackPropagation for Softmax<T>
+where
+    T: BackPropagation<Gradient = PixelArray<OUTPUT>>,
+{
+    type Gradient = PixelArray<OUTPUT>;
 
-        CachedLayer {
-            layer: Softmax { data: data_cached },
-            item,
-        }
+    fn backprop(&mut self, output_gradient: Self::Gradient, learning_rate: f32) {
+        self.data.backprop(
+            PixelArray::new(output_gradient.into_inner().map(|g| g * learning_rate)),
+            learning_rate,
+        );
     }
 }
 
@@ -193,9 +227,9 @@ mod test {
         let weights = [[1.0, 0.5, -0.2], [-1.0, 2.0, 0.1]];
         let bias = [1.0, -0.5];
 
-        let fc = FcWeights { weights, bias };
+        let mut fc = FcWeights { weights, bias };
         let input = PixelArray::new([2.0, 3.0, -1.0]);
-        let result = input.fully_connected(&fc).forward();
+        let result = input.fully_connected(&mut fc).forward();
 
         assert_eq!(result.into_inner(), [4.7, 3.4]);
     }

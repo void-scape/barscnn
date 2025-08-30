@@ -18,11 +18,29 @@ pub fn grayscale_from_bmp(bmp: &BmpReader) -> Result<Image<Grayscale>, &'static 
     grayscale_image_from_bmp(bmp)
 }
 
-#[derive(Debug)]
 pub struct Image<T> {
     width: u32,
     height: u32,
     pixels: Pixels<T>,
+}
+
+impl<T> std::fmt::Debug for Image<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Image")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T> Default for Image<T> {
+    fn default() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            pixels: Pixels::new(Vec::new()),
+        }
+    }
 }
 
 impl<T: Clone> Clone for Image<T> {
