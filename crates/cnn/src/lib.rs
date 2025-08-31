@@ -16,7 +16,6 @@ pub mod prelude {
     pub use super::feature::FeatureMapData;
     pub use super::flatten::FlattenData;
     pub use super::image::Image;
-    pub use super::image::pixel::Grayscale;
     pub use super::layer::Layer;
     pub use super::linear::{FcWeights, FullyConnectedData, SoftmaxData};
     pub use super::pool::MaxPoolData;
