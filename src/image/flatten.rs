@@ -19,9 +19,9 @@ where
     fn flatten(self) -> Flatten<Self, LEN>;
 }
 
-impl<T, const LEN: usize> FlattenData<LEN> for T
+impl<'a, T, const LEN: usize> FlattenData<LEN> for T
 where
-    T: Layer,
+    T: Layer<'a>,
     T::Item: Flattenable<LEN>,
 {
     fn flatten(self) -> Flatten<Self, LEN> {
@@ -36,30 +36,35 @@ where
     }
 }
 
-impl<T, const LEN: usize> Layer for Flatten<T, LEN>
+impl<'a, T, const LEN: usize> Layer<'a> for Flatten<T, LEN>
 where
-    T: Layer,
+    T: Layer<'a>,
     T::Item: Flattenable<LEN>,
 {
+    type Input = T::Input;
     type Item = PixelArray<LEN>;
 
-    fn forward(&mut self) -> Self::Item {
-        let item = self.data.forward();
+    fn forward(&mut self, input: Self::Input) -> Self::Item {
+        let item = self.data.forward(input);
         self.shape = item.shape();
         item.flatten()
     }
 }
 
-impl<T, const LEN: usize> BackPropagation for Flatten<T, LEN>
+impl<'a, T, Out, const LEN: usize> BackPropagation for Flatten<T, LEN>
 where
-    T: Layer + BackPropagation<Gradient = T::Item>,
-    T::Item: Flattenable<LEN>,
+    T: Layer<'a> + BackPropagation<Gradient = Out>,
+    T::Item: Flattenable<LEN, Out = Out>,
 {
     type Gradient = PixelArray<LEN>;
 
-    fn backprop(&mut self, output_gradient: Self::Gradient, learning_rate: f32) {
+    fn backprop(&mut self, output_gradient: Self::Gradient) {
         let gradient = T::Item::unflatten(output_gradient, self.shape);
-        self.data.backprop(gradient, learning_rate);
+        self.data.backprop(gradient);
+    }
+
+    fn learning_rate(&self) -> f32 {
+        <T as BackPropagation>::learning_rate(&self.data)
     }
 }
 
@@ -70,12 +75,16 @@ struct Shape {
 }
 
 trait Flattenable<const LEN: usize>: Clone {
+    type Out;
+
     fn shape(&self) -> Shape;
     fn flatten(&self) -> PixelArray<LEN>;
-    fn unflatten(pixels: PixelArray<LEN>, shape: Shape) -> Self;
+    fn unflatten(pixels: PixelArray<LEN>, shape: Shape) -> Self::Out;
 }
 
 impl<const LEN: usize> Flattenable<LEN> for Image<Grayscale> {
+    type Out = Self;
+
     fn shape(&self) -> Shape {
         Shape {
             width: self.width,
@@ -84,18 +93,13 @@ impl<const LEN: usize> Flattenable<LEN> for Image<Grayscale> {
     }
 
     fn flatten(&self) -> PixelArray<LEN> {
-        if self.pixels.len() != LEN {
-            panic!(
-                "called `flatten` with the incorrect `OUTPUT`, expected {}, got {LEN}",
-                self.pixels.len()
-            );
-        }
+        assert_eq!(self.pixels.len(), LEN);
         let mut arr = [0.0; LEN];
         arr.copy_from_slice(self.pixels.as_slice());
         PixelArray::new(arr)
     }
 
-    fn unflatten(pixels: PixelArray<LEN>, shape: Shape) -> Self {
+    fn unflatten(pixels: PixelArray<LEN>, shape: Shape) -> Self::Out {
         Self {
             width: shape.width,
             height: shape.height,
@@ -105,6 +109,8 @@ impl<const LEN: usize> Flattenable<LEN> for Image<Grayscale> {
 }
 
 impl<const LEN: usize, const DEPTH: usize> Flattenable<LEN> for FeatureSet<DEPTH> {
+    type Out = Self;
+
     fn shape(&self) -> Shape {
         debug_assert!(
             self.iter()
@@ -117,7 +123,7 @@ impl<const LEN: usize, const DEPTH: usize> Flattenable<LEN> for FeatureSet<DEPTH
     }
 
     fn flatten(&self) -> PixelArray<LEN> {
-        debug_assert_eq!(self.iter().map(|img| img.pixels.len()).sum::<usize>(), LEN);
+        assert_eq!(self.iter().map(|img| img.pixels.len()).sum::<usize>(), LEN);
         let mut arr = [0.0; LEN];
         let mut offset = 0;
         for img in self.iter() {
@@ -127,7 +133,7 @@ impl<const LEN: usize, const DEPTH: usize> Flattenable<LEN> for FeatureSet<DEPTH
         PixelArray::new(arr)
     }
 
-    fn unflatten(pixels: PixelArray<LEN>, shape: Shape) -> Self {
+    fn unflatten(pixels: PixelArray<LEN>, shape: Shape) -> Self::Out {
         let mut set = std::array::from_fn(|_| Image {
             width: shape.width,
             height: shape.height,

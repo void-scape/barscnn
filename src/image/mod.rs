@@ -1,6 +1,9 @@
-use self::bmp::{BmpReader, BmpWriter};
-use self::pixel::{Grayscale, Pixel, Pixels, Rgb};
+use bmp::{BmpReader, BmpWriter};
+use pixel::{Grayscale, Pixel, Pixels, Rgb};
 
+use self::layer::{BackPropagation, Layer};
+
+pub mod activation;
 pub mod bmp;
 pub mod feature;
 pub mod filter;
@@ -9,6 +12,48 @@ pub mod layer;
 pub mod linear;
 pub mod pixel;
 pub mod pool;
+
+pub mod prelude {
+    pub use super::activation::ReluData;
+    pub use super::feature::FeatureMapData;
+    pub use super::flatten::FlattenData;
+    pub use super::layer::Layer;
+    pub use super::linear::{FcWeights, FullyConnectedData, SoftmaxData};
+    pub use super::pixel::Grayscale;
+    pub use super::pool::MaxPoolData;
+    pub use super::{Image, ImageCnn};
+    pub use super::{filter, filter::Filter};
+}
+
+#[derive(Debug)]
+pub struct ImageCnn {
+    learning_rate: f32,
+}
+
+impl ImageCnn {
+    pub fn learning_rate(lr: f32) -> Self {
+        Self { learning_rate: lr }
+    }
+}
+
+impl<'a> Layer<'a> for ImageCnn {
+    type Input = &'a Image<Grayscale>;
+    type Item = Image<Grayscale>;
+
+    fn forward(&mut self, input: Self::Input) -> Self::Item {
+        input.clone()
+    }
+}
+
+impl BackPropagation for ImageCnn {
+    type Gradient = Image<Grayscale>;
+
+    fn backprop(&mut self, _: Self::Gradient) {}
+
+    fn learning_rate(&self) -> f32 {
+        self.learning_rate
+    }
+}
 
 pub fn rgb_from_bmp(bmp: &BmpReader) -> Result<Image<Rgb>, &'static str> {
     rgb_image_from_bmp(bmp)

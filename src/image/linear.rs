@@ -18,10 +18,7 @@ where
     ) -> FullyConnected<'a, Self, INPUT, OUTPUT>;
 }
 
-impl<'a, T, const INPUT: usize, const OUTPUT: usize> FullyConnectedData<'a, INPUT, OUTPUT> for T
-where
-    T: Layer<Item = PixelArray<INPUT>>,
-{
+impl<'a, T, const INPUT: usize, const OUTPUT: usize> FullyConnectedData<'a, INPUT, OUTPUT> for T {
     fn fully_connected(
         self,
         fc: &'a mut FcWeights<INPUT, OUTPUT>,
@@ -34,14 +31,16 @@ where
     }
 }
 
-impl<'a, T, const INPUT: usize, const OUTPUT: usize> Layer for FullyConnected<'a, T, INPUT, OUTPUT>
+impl<'a, 'b, T, const INPUT: usize, const OUTPUT: usize> Layer<'b>
+    for FullyConnected<'a, T, INPUT, OUTPUT>
 where
-    T: Layer<Item = PixelArray<INPUT>>,
+    T: Layer<'b, Item = PixelArray<INPUT>>,
 {
+    type Input = T::Input;
     type Item = PixelArray<OUTPUT>;
 
-    fn forward(&mut self) -> Self::Item {
-        self.input = self.data.forward().into_inner();
+    fn forward(&mut self, input: Self::Input) -> Self::Item {
+        self.input = self.data.forward(input).into_inner();
         fully_connected(self.fc, self.input)
     }
 }
@@ -53,7 +52,9 @@ where
 {
     type Gradient = PixelArray<OUTPUT>;
 
-    fn backprop(&mut self, output_gradient: Self::Gradient, learning_rate: f32) {
+    fn backprop(&mut self, output_gradient: Self::Gradient) {
+        let learning_rate = self.learning_rate();
+
         for r in 0..OUTPUT {
             for c in 0..INPUT {
                 let wgradient = self.input[c] * output_gradient[r];
@@ -72,7 +73,11 @@ where
             }
         }
 
-        self.data.backprop(PixelArray::new(out), learning_rate);
+        self.data.backprop(PixelArray::new(out));
+    }
+
+    fn learning_rate(&self) -> f32 {
+        self.data.learning_rate()
     }
 }
 
@@ -94,8 +99,8 @@ fn fully_connected<const INPUT: usize, const OUTPUT: usize>(
 
 #[derive(Debug)]
 pub struct FcWeights<const INPUT: usize, const OUTPUT: usize> {
-    weights: [[f32; INPUT]; OUTPUT],
-    bias: [f32; OUTPUT],
+    weights: Box<[[f32; INPUT]; OUTPUT]>,
+    bias: Box<[f32; OUTPUT]>,
 }
 
 impl<const INPUT: usize, const OUTPUT: usize> FcWeights<INPUT, OUTPUT> {
@@ -134,15 +139,21 @@ fn glorot_initialization<const INPUT: usize, const OUTPUT: usize>() -> FcWeights
     let mut rng = XorShiftRng::new(time_seed());
 
     let scale = (2.0 / (INPUT + OUTPUT) as f32).sqrt();
-    let weights = [[0.0; INPUT].map(|_| {
-        let random_val = rng.next() as f32 / u64::MAX as f32;
-        (random_val - 0.5) * 2.0 * scale
-    }); OUTPUT];
+    let weights_vec: Vec<[f32; INPUT]> = (0..OUTPUT)
+        .map(|_| {
+            [0.0; INPUT].map(|_| {
+                let random_val = rng.next() as f32 / u64::MAX as f32;
+                (random_val - 0.5) * 2.0 * scale
+            })
+        })
+        .collect();
 
-    let bias = [0.0; OUTPUT].map(|_| {
-        let random_val = rng.next() as f32 / u64::MAX as f32;
-        (random_val - 0.5) * 0.1
-    });
+    let weights = weights_vec
+        .into_boxed_slice()
+        .try_into()
+        .expect("Failed to convert to fixed-size array");
+
+    let bias = vec![0.0; OUTPUT].into_boxed_slice().try_into().unwrap();
 
     FcWeights { weights, bias }
 }
@@ -156,37 +167,38 @@ impl<Data, const LEN: usize> Softmax<Data>
 where
     Self: BackPropagation<Gradient = PixelArray<LEN>>,
 {
-    pub fn backprop_index(&mut self, index: usize, mut gradients: [f32; LEN], learning_rate: f32) {
+    pub fn backprop_index(&mut self, index: usize, mut gradients: [f32; LEN]) {
         assert!(index < LEN);
         gradients[index] -= 1.0;
-        self.backprop(PixelArray::new(gradients), learning_rate);
+        self.backprop(PixelArray::new(gradients));
     }
 }
 
-pub trait SoftmaxData
+pub trait SoftmaxData<const OUTPUT: usize>
 where
     Self: Sized,
 {
     fn softmax(self) -> Softmax<Self>;
 }
 
-impl<T, const OUTPUT: usize> SoftmaxData for T
+impl<'a, T, const OUTPUT: usize> SoftmaxData<OUTPUT> for T
 where
-    T: Layer<Item = PixelArray<OUTPUT>>,
+    T: Layer<'a, Item = PixelArray<OUTPUT>>,
 {
     fn softmax(self) -> Softmax<Self> {
         Softmax { data: self }
     }
 }
 
-impl<T, const OUTPUT: usize> Layer for Softmax<T>
+impl<'a, T, const OUTPUT: usize> Layer<'a> for Softmax<T>
 where
-    T: Layer<Item = PixelArray<OUTPUT>>,
+    T: Layer<'a, Item = PixelArray<OUTPUT>>,
 {
+    type Input = T::Input;
     type Item = [f32; OUTPUT];
 
-    fn forward(&mut self) -> Self::Item {
-        softmax(self.data.forward().into_inner())
+    fn forward(&mut self, input: Self::Input) -> Self::Item {
+        softmax(self.data.forward(input).into_inner())
     }
 }
 
@@ -196,11 +208,12 @@ where
 {
     type Gradient = PixelArray<OUTPUT>;
 
-    fn backprop(&mut self, output_gradient: Self::Gradient, learning_rate: f32) {
-        self.data.backprop(
-            PixelArray::new(output_gradient.into_inner().map(|g| g * learning_rate)),
-            learning_rate,
-        );
+    fn backprop(&mut self, output_gradient: Self::Gradient) {
+        self.data.backprop(output_gradient);
+    }
+
+    fn learning_rate(&self) -> f32 {
+        self.data.learning_rate()
     }
 }
 
@@ -227,9 +240,12 @@ mod test {
         let weights = [[1.0, 0.5, -0.2], [-1.0, 2.0, 0.1]];
         let bias = [1.0, -0.5];
 
-        let mut fc = FcWeights { weights, bias };
+        let mut fc = FcWeights {
+            weights: Box::new(weights),
+            bias: Box::new(bias),
+        };
         let input = PixelArray::new([2.0, 3.0, -1.0]);
-        let result = input.fully_connected(&mut fc).forward();
+        let result = input.fully_connected(&mut fc).forward(());
 
         assert_eq!(result.into_inner(), [4.7, 3.4]);
     }

@@ -1,4 +1,4 @@
-use super::layer::Layer;
+use super::layer::{BackPropagation, Layer};
 
 #[derive(Debug)]
 pub struct Pixels<T>(Vec<T>);
@@ -28,6 +28,10 @@ impl<T> Pixels<T> {
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.0.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.0.iter_mut()
     }
 }
 
@@ -69,6 +73,10 @@ impl<const LEN: usize> PixelArray<LEN> {
         self.0.iter()
     }
 
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut f32> {
+        self.0.iter_mut()
+    }
+
     pub fn into_inner(self) -> [f32; LEN] {
         self.0
     }
@@ -88,11 +96,28 @@ impl<const LEN: usize> std::ops::IndexMut<usize> for PixelArray<LEN> {
     }
 }
 
-impl<const LEN: usize> Layer for PixelArray<LEN> {
+impl<'a, const LEN: usize> Layer<'a> for PixelArray<LEN> {
+    type Input = ();
     type Item = Self;
 
-    fn forward(&mut self) -> Self::Item {
+    fn forward(&mut self, _: Self::Input) -> Self::Item {
         PixelArray(self.into_inner())
+    }
+}
+
+impl<const LEN: usize> BackPropagation for PixelArray<LEN> {
+    type Gradient = Self;
+
+    fn backprop(&mut self, _: Self::Gradient) {
+        #[cfg(not(debug_assertions))]
+        panic!("This can not be called in production");
+    }
+
+    fn learning_rate(&self) -> f32 {
+        #[cfg(not(debug_assertions))]
+        panic!("This can not be called in production");
+        #[cfg(debug_assertions)]
+        0.0
     }
 }
 

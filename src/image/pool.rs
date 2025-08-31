@@ -19,9 +19,9 @@ where
     fn max_pool(self, size: usize) -> MaxPool<Self, Input>;
 }
 
-impl<T, Input> MaxPoolData<Input> for T
+impl<'a, T, Input> MaxPoolData<Input> for T
 where
-    T: Layer<Item = Input>,
+    T: Layer<'a, Item = Input>,
     T::Item: MaxPoolable,
 {
     fn max_pool(self, size: usize) -> MaxPool<Self, T::Item> {
@@ -33,15 +33,16 @@ where
     }
 }
 
-impl<T, Input> Layer for MaxPool<T, Input>
+impl<'a, T, Input> Layer<'a> for MaxPool<T, Input>
 where
-    T: Layer<Item = Input>,
+    T: Layer<'a, Item = Input>,
     T::Item: MaxPoolable,
 {
+    type Input = T::Input;
     type Item = T::Item;
 
-    fn forward(&mut self) -> Self::Item {
-        let input = self.data.forward();
+    fn forward(&mut self, input: Self::Input) -> Self::Item {
+        let input = self.data.forward(input);
         self.input = input.clone();
         input.max_pool(self.size)
     }
@@ -49,14 +50,18 @@ where
 
 impl<T, Input> BackPropagation for MaxPool<T, Input>
 where
-    T: Layer<Item = Input> + BackPropagation<Gradient = Input>,
+    T: BackPropagation<Gradient = Input>,
     Input: MaxPoolable,
 {
-    type Gradient = T::Item;
+    type Gradient = Input;
 
-    fn backprop(&mut self, output_gradient: Self::Gradient, learning_rate: f32) {
+    fn backprop(&mut self, output_gradient: Self::Gradient) {
         let unmaxed = <Input as MaxPoolable>::unmax_pool(&self.input, output_gradient, self.size);
-        self.data.backprop(unmaxed, learning_rate);
+        self.data.backprop(unmaxed);
+    }
+
+    fn learning_rate(&self) -> f32 {
+        self.data.learning_rate()
     }
 }
 
