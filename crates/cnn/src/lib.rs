@@ -16,20 +16,24 @@ pub mod prelude {
     pub use super::feature::FeatureMapData;
     pub use super::flatten::FlattenData;
     pub use super::image::Image;
-    pub use super::layer::Layer;
+    pub use super::layer::{BackPropagation, Layer};
     pub use super::linear::{FcWeights, FullyConnectedData, SoftmaxData};
     pub use super::pool::MaxPoolData;
     pub use super::{filter, filter::Filter};
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ImageCnn {
-    learning_rate: f32,
+    pub input: Image,
+    pub learning_rate: f32,
 }
 
 impl ImageCnn {
     pub fn learning_rate(lr: f32) -> Self {
-        Self { learning_rate: lr }
+        Self {
+            input: Image::default(),
+            learning_rate: lr,
+        }
     }
 }
 
@@ -38,6 +42,7 @@ impl Layer for ImageCnn {
     type Item = Image;
 
     fn forward(&mut self, input: Self::Input) -> Self::Item {
+        self.input = input.clone();
         input
     }
 }

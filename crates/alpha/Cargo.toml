@@ -5,12 +5,15 @@ edition = "2024"
 
 [dependencies]
 cnn = { path = "../cnn" }
-
-bevy = { version = "0.16", default-features = false, features = [
-    "std",
-    "dynamic_linking",
-    "bevy_window",
-] }
+bevy = { version = "0.16", features = ["dynamic_linking"] }
+bevy_rand = "0.11"
+rand = "0.9"
+bevy_prng = { version = "0.11.3", features = ["wyrand"] }
+indicatif = "0.18"
+bevy-inspector-egui = "0.33.1"
+bevy_egui = "0.36.0"
+egui_double_slider = "0.9.0"
+egui_plot = "0.33.0"
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]

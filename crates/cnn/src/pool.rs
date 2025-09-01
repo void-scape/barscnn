@@ -1,11 +1,11 @@
 use crate::image::Image;
 use crate::layer::{BackPropagation, Layer};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MaxPool<Data> {
-    data: Data,
-    input: Option<Image>,
-    size: usize,
+    pub data: Data,
+    pub size: usize,
+    pub input: Image,
 }
 
 pub trait MaxPoolData
@@ -22,8 +22,8 @@ where
     fn max_pool(self, size: usize) -> MaxPool<Self> {
         MaxPool {
             data: self,
-            input: None,
             size,
+            input: Image::default(),
         }
     }
 }
@@ -38,7 +38,7 @@ where
     fn forward(&mut self, input: Self::Input) -> Self::Item {
         let input = self.data.forward(input);
         let result = max_pool(&input, self.size);
-        self.input = Some(input);
+        self.input = input;
         result
     }
 }
@@ -50,13 +50,8 @@ where
     type Gradient = Image;
 
     fn backprop(&mut self, output_gradient: Self::Gradient) {
-        let input = self
-            .input
-            .as_ref()
-            .expect("`Layer::forward` must be called before `BackPropagation::backprop`");
-
         self.data
-            .backprop(max_pool_reshape(input, &output_gradient, self.size));
+            .backprop(max_pool_reshape(&self.input, &output_gradient, self.size));
     }
 
     fn learning_rate(&self) -> f32 {
@@ -64,7 +59,7 @@ where
     }
 }
 
-fn max_pool(input: &Image, size: usize) -> Image {
+pub fn max_pool(input: &Image, size: usize) -> Image {
     assert!(size != 0);
 
     debug_assert_eq!(

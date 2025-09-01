@@ -1,12 +1,12 @@
 use std::marker::PhantomData;
 
-use crate::image::{Image, Shape};
+use crate::image::Image;
 use crate::layer::{BackPropagation, Layer};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Flatten<Data, const LEN: usize> {
-    data: Data,
-    shape: Option<Shape>,
+    pub data: Data,
+    pub input: Image,
     _len: PhantomData<[f32; LEN]>,
 }
 
@@ -24,7 +24,7 @@ where
     fn flatten<const LEN: usize>(self) -> Flatten<Self, LEN> {
         Flatten {
             data: self,
-            shape: None,
+            input: Image::default(),
             _len: PhantomData,
         }
     }
@@ -39,10 +39,10 @@ where
 
     fn forward(&mut self, input: Self::Input) -> Self::Item {
         let image = self.data.forward(input);
-        self.shape = Some(image.shape());
-
         assert_eq!(image.pixels.len(), LEN);
-        image.pixels.as_slice().try_into().unwrap()
+        let result = image.pixels.as_slice().try_into().unwrap();
+        self.input = image;
+        result
     }
 }
 
@@ -53,10 +53,7 @@ where
     type Gradient = [f32; LEN];
 
     fn backprop(&mut self, output_gradient: Self::Gradient) {
-        let shape = self
-            .shape
-            .expect("`Layer::forward` must be called before `BackPropagation::backprop`");
-
+        let shape = self.input.shape();
         assert_eq!(shape.width * shape.height * shape.channels, LEN);
         self.data.backprop(Image {
             width: shape.width,

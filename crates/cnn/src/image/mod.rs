@@ -1,21 +1,11 @@
 pub mod bmp;
 
-#[derive(Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Image {
     pub width: usize,
     pub height: usize,
     pub channels: usize,
     pub pixels: Vec<f32>,
-}
-
-impl std::fmt::Debug for Image {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Image")
-            .field("width", &self.width)
-            .field("height", &self.height)
-            .field("channels", &self.channels)
-            .finish_non_exhaustive()
-    }
 }
 
 impl Image {

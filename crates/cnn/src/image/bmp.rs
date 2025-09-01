@@ -120,7 +120,8 @@ fn image_from_bytes(bytes: &[u8]) -> Result<Image, &'static str> {
             let padding = (4 - (bpr % 4)) % 4;
 
             for h in (0..height).rev() {
-                *input = &bytes[h * 3 * width + padding..];
+                let row_start = data_index as usize + h * (width * 3 + padding);
+                *input = &bytes[row_start..];
 
                 for _ in 0..width {
                     let b = input[0] as f32 / u8::MAX as f32;
@@ -146,8 +147,12 @@ fn image_from_bytes(bytes: &[u8]) -> Result<Image, &'static str> {
                 ((value * 255) / max_value) as u8
             }
 
+            let bpr = width as usize * 3;
+            let padding = (4 - (bpr % 4)) % 4;
+
             for h in (0..height as usize).rev() {
-                *input = &bytes[h * 4 * width as usize..];
+                let row_start = data_index as usize + h * (width * 4 + padding);
+                *input = &bytes[row_start..];
 
                 for _ in 0..width {
                     let pixel = u32(input)?;
@@ -164,7 +169,8 @@ fn image_from_bytes(bytes: &[u8]) -> Result<Image, &'static str> {
             let padding = (4 - (bpr % 4)) % 4;
 
             for h in (0..height as usize).rev() {
-                *input = &bytes[h * width as usize + padding..];
+                let row_start = data_index as usize + h * (width + padding);
+                *input = &bytes[row_start..];
 
                 for _ in 0..width {
                     let l = input[0];
@@ -222,15 +228,6 @@ fn image_to_bytes(image: &Image) -> Vec<u8> {
                     let pixel = (image.pixels[y * width + x].clamp(0.0, u8::MAX as f32)
                         / u8::MAX as f32) as u8;
                     bytes.extend([pixel; 3]);
-                }
-                3 => {
-                    let r = (image.pixels[y * width + x].clamp(0.0, u8::MAX as f32)
-                        / u8::MAX as f32) as u8;
-                    let g = (image.pixels[y * width + x].clamp(0.0, u8::MAX as f32)
-                        / u8::MAX as f32) as u8;
-                    let b = (image.pixels[y * width + x].clamp(0.0, u8::MAX as f32)
-                        / u8::MAX as f32) as u8;
-                    bytes.extend([b, g, r]);
                 }
                 c => panic!("invalid BMP channels: {c}"),
             }

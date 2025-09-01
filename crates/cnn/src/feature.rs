@@ -2,40 +2,40 @@ use crate::filter::{Filter, conv_padded};
 use crate::image::Image;
 use crate::layer::{BackPropagation, Layer};
 
-#[derive(Debug)]
-pub struct FeatureMap<'a, Data, const WEIGHTS: usize, const DEPTH: usize, const WIDTH: usize> {
-    data: Data,
-    input: Option<Image>,
-    filters: &'a mut [Filter<WEIGHTS, DEPTH>; WIDTH],
+#[derive(Debug, Clone)]
+pub struct FeatureMap<Data, const WEIGHTS: usize, const DEPTH: usize, const WIDTH: usize> {
+    pub data: Data,
+    pub filters: [Filter<WEIGHTS, DEPTH>; WIDTH],
+    pub input: Image,
 }
 
-pub trait FeatureMapData<'a, Data, const WEIGHTS: usize, const DEPTH: usize, const WIDTH: usize>
+pub trait FeatureMapData<Data, const WEIGHTS: usize, const DEPTH: usize, const WIDTH: usize>
 where
     Self: Sized,
 {
     fn feature_map(
         self,
-        filters: &'a mut [Filter<WEIGHTS, DEPTH>; WIDTH],
-    ) -> FeatureMap<'a, Self, WEIGHTS, DEPTH, WIDTH>;
+        filters: [Filter<WEIGHTS, DEPTH>; WIDTH],
+    ) -> FeatureMap<Self, WEIGHTS, DEPTH, WIDTH>;
 }
 
-impl<'a, T, const WEIGHTS: usize, const DEPTH: usize, const WIDTH: usize>
-    FeatureMapData<'a, T, WEIGHTS, DEPTH, WIDTH> for T
+impl<T, const WEIGHTS: usize, const DEPTH: usize, const WIDTH: usize>
+    FeatureMapData<T, WEIGHTS, DEPTH, WIDTH> for T
 {
     fn feature_map(
         self,
-        filters: &'a mut [Filter<WEIGHTS, DEPTH>; WIDTH],
-    ) -> FeatureMap<'a, T, WEIGHTS, DEPTH, WIDTH> {
+        filters: [Filter<WEIGHTS, DEPTH>; WIDTH],
+    ) -> FeatureMap<T, WEIGHTS, DEPTH, WIDTH> {
         FeatureMap {
             data: self,
-            input: None,
+            input: Image::default(),
             filters,
         }
     }
 }
 
-impl<'a, T, const WEIGHTS: usize, const DEPTH: usize, const WIDTH: usize> Layer
-    for FeatureMap<'a, T, WEIGHTS, DEPTH, WIDTH>
+impl<T, const WEIGHTS: usize, const DEPTH: usize, const WIDTH: usize> Layer
+    for FeatureMap<T, WEIGHTS, DEPTH, WIDTH>
 where
     T: Layer<Item = Image>,
 {
@@ -44,24 +44,21 @@ where
 
     fn forward(&mut self, input: Self::Input) -> Self::Item {
         let input = self.data.forward(input);
-        let result = conv_padded(&input, self.filters);
-        self.input = Some(input);
+        let result = conv_padded(&input, &self.filters);
+        self.input = input;
         result
     }
 }
 
-impl<'a, T, const WEIGHTS: usize, const DEPTH: usize, const WIDTH: usize> BackPropagation
-    for FeatureMap<'a, T, WEIGHTS, DEPTH, WIDTH>
+impl<T, const WEIGHTS: usize, const DEPTH: usize, const WIDTH: usize> BackPropagation
+    for FeatureMap<T, WEIGHTS, DEPTH, WIDTH>
 where
     T: BackPropagation<Gradient = Image>,
 {
     type Gradient = Image;
 
     fn backprop(&mut self, output_gradient: Self::Gradient) {
-        let input = self
-            .input
-            .as_ref()
-            .expect("`Layer::forward` must be called before `BackPropagation::backprop`");
+        let input = &self.input;
         let mut gradient = Image {
             width: input.width,
             height: input.height,

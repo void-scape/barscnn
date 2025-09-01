@@ -1,27 +1,21 @@
 use crate::layer::{BackPropagation, Layer};
 
-#[derive(Debug)]
-pub struct FullyConnected<'a, Data, const INPUT: usize, const OUTPUT: usize> {
-    data: Data,
-    input: [f32; INPUT],
-    fc: &'a mut FcWeights<INPUT, OUTPUT>,
+#[derive(Debug, Clone)]
+pub struct FullyConnected<Data, const INPUT: usize, const OUTPUT: usize> {
+    pub data: Data,
+    pub fc: FcWeights<INPUT, OUTPUT>,
+    pub input: [f32; INPUT],
 }
 
-pub trait FullyConnectedData<'a, const INPUT: usize, const OUTPUT: usize>
+pub trait FullyConnectedData<const INPUT: usize, const OUTPUT: usize>
 where
     Self: Sized,
 {
-    fn fully_connected(
-        self,
-        fc: &'a mut FcWeights<INPUT, OUTPUT>,
-    ) -> FullyConnected<'a, Self, INPUT, OUTPUT>;
+    fn fully_connected(self, fc: FcWeights<INPUT, OUTPUT>) -> FullyConnected<Self, INPUT, OUTPUT>;
 }
 
-impl<'a, T, const INPUT: usize, const OUTPUT: usize> FullyConnectedData<'a, INPUT, OUTPUT> for T {
-    fn fully_connected(
-        self,
-        fc: &'a mut FcWeights<INPUT, OUTPUT>,
-    ) -> FullyConnected<'a, Self, INPUT, OUTPUT> {
+impl<T, const INPUT: usize, const OUTPUT: usize> FullyConnectedData<INPUT, OUTPUT> for T {
+    fn fully_connected(self, fc: FcWeights<INPUT, OUTPUT>) -> FullyConnected<Self, INPUT, OUTPUT> {
         FullyConnected {
             data: self,
             input: [0.0; INPUT],
@@ -30,7 +24,7 @@ impl<'a, T, const INPUT: usize, const OUTPUT: usize> FullyConnectedData<'a, INPU
     }
 }
 
-impl<'a, T, const INPUT: usize, const OUTPUT: usize> Layer for FullyConnected<'a, T, INPUT, OUTPUT>
+impl<T, const INPUT: usize, const OUTPUT: usize> Layer for FullyConnected<T, INPUT, OUTPUT>
 where
     T: Layer<Item = [f32; INPUT]>,
 {
@@ -39,12 +33,12 @@ where
 
     fn forward(&mut self, input: Self::Input) -> Self::Item {
         self.input = self.data.forward(input);
-        fully_connected(self.fc, self.input)
+        fully_connected(&self.fc, self.input)
     }
 }
 
-impl<'a, Data, const INPUT: usize, const OUTPUT: usize> BackPropagation
-    for FullyConnected<'a, Data, INPUT, OUTPUT>
+impl<Data, const INPUT: usize, const OUTPUT: usize> BackPropagation
+    for FullyConnected<Data, INPUT, OUTPUT>
 where
     Data: BackPropagation<Gradient = [f32; INPUT]>,
 {
@@ -94,10 +88,10 @@ fn fully_connected<const INPUT: usize, const OUTPUT: usize>(
     output
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FcWeights<const INPUT: usize, const OUTPUT: usize> {
-    weights: Box<[[f32; INPUT]; OUTPUT]>,
-    bias: Box<[f32; OUTPUT]>,
+    pub weights: Box<[[f32; INPUT]; OUTPUT]>,
+    pub bias: Box<[f32; OUTPUT]>,
 }
 
 impl<const INPUT: usize, const OUTPUT: usize> FcWeights<INPUT, OUTPUT> {
@@ -155,19 +149,20 @@ fn glorot_initialization<const INPUT: usize, const OUTPUT: usize>() -> FcWeights
     FcWeights { weights, bias }
 }
 
-#[derive(Debug)]
-pub struct Softmax<Data> {
-    data: Data,
+#[derive(Debug, Clone)]
+pub struct Softmax<Data, const OUTPUT: usize> {
+    pub data: Data,
+    pub input: [f32; OUTPUT],
 }
 
-impl<Data, const LEN: usize> Softmax<Data>
+impl<Data, const OUTPUT: usize> Softmax<Data, OUTPUT>
 where
-    Self: BackPropagation<Gradient = [f32; LEN]>,
+    Self: BackPropagation<Gradient = [f32; OUTPUT]>,
 {
-    pub fn backprop_index(&mut self, index: usize, mut gradients: [f32; LEN]) {
-        assert!(index < LEN);
-        gradients[index] -= 1.0;
-        self.backprop(gradients);
+    pub fn backprop_index(&mut self, index: usize, mut result: [f32; OUTPUT]) {
+        assert!(index < OUTPUT);
+        result[index] -= 1.0;
+        self.backprop(result);
     }
 }
 
@@ -175,19 +170,22 @@ pub trait SoftmaxData<const OUTPUT: usize>
 where
     Self: Sized,
 {
-    fn softmax(self) -> Softmax<Self>;
+    fn softmax(self) -> Softmax<Self, OUTPUT>;
 }
 
 impl<T, const OUTPUT: usize> SoftmaxData<OUTPUT> for T
 where
     T: Layer<Item = [f32; OUTPUT]>,
 {
-    fn softmax(self) -> Softmax<Self> {
-        Softmax { data: self }
+    fn softmax(self) -> Softmax<Self, OUTPUT> {
+        Softmax {
+            data: self,
+            input: [0.0; OUTPUT],
+        }
     }
 }
 
-impl<T, const OUTPUT: usize> Layer for Softmax<T>
+impl<T, const OUTPUT: usize> Layer for Softmax<T, OUTPUT>
 where
     T: Layer<Item = [f32; OUTPUT]>,
 {
@@ -195,11 +193,13 @@ where
     type Item = [f32; OUTPUT];
 
     fn forward(&mut self, input: Self::Input) -> Self::Item {
-        softmax(self.data.forward(input))
+        let input = self.data.forward(input);
+        self.input = input;
+        softmax(input)
     }
 }
 
-impl<T, const OUTPUT: usize> BackPropagation for Softmax<T>
+impl<T, const OUTPUT: usize> BackPropagation for Softmax<T, OUTPUT>
 where
     T: BackPropagation<Gradient = [f32; OUTPUT]>,
 {
@@ -214,7 +214,7 @@ where
     }
 }
 
-fn softmax<const OUTPUT: usize>(pixels: [f32; OUTPUT]) -> [f32; OUTPUT] {
+pub fn softmax<const OUTPUT: usize>(pixels: [f32; OUTPUT]) -> [f32; OUTPUT] {
     debug_assert!(OUTPUT != 0);
     debug_assert_eq!(pixels.len(), OUTPUT);
 
@@ -237,12 +237,12 @@ mod test {
         let weights = [[1.0, 0.5, -0.2], [-1.0, 2.0, 0.1]];
         let bias = [1.0, -0.5];
 
-        let mut fc = FcWeights {
+        let fc = FcWeights {
             weights: Box::new(weights),
             bias: Box::new(bias),
         };
         let input = [2.0, 3.0, -1.0];
-        let result = input.fully_connected(&mut fc).forward(());
+        let result = input.fully_connected(fc).forward(());
         assert_eq!(result, [4.7, 3.4]);
     }
 

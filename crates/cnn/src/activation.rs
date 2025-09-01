@@ -1,15 +1,16 @@
 use crate::image::Image;
 use crate::layer::{BackPropagation, Layer};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Relu<Data, Input> {
-    data: Data,
-    input: Option<Input>,
+    pub data: Data,
+    pub input: Input,
 }
 
 pub trait ReluData<Input>
 where
     Self: Sized,
+    Input: Default,
 {
     fn relu(self) -> Relu<Self, Input>;
 }
@@ -17,11 +18,12 @@ where
 impl<T, Input> ReluData<Input> for T
 where
     T: Layer<Item = Input>,
+    Input: Default,
 {
     fn relu(self) -> Relu<Self, Input> {
         Relu {
             data: self,
-            input: None,
+            input: Input::default(),
         }
     }
 }
@@ -36,10 +38,14 @@ where
 
     fn forward(&mut self, input: Self::Input) -> Self::Item {
         let input = self.data.forward(input);
-        let result = activation(&input, &mut |input| *input = input.max(0.0));
-        self.input = Some(input);
+        let result = activation(&input, &mut relu);
+        self.input = input;
         result
     }
+}
+
+pub fn relu(sample: &mut f32) {
+    *sample = sample.max(0.0);
 }
 
 impl<T, Input> BackPropagation for Relu<T, Input>
@@ -50,12 +56,7 @@ where
     type Gradient = Input;
 
     fn backprop(&mut self, mut output_gradient: Self::Gradient) {
-        let input = self
-            .input
-            .as_ref()
-            .expect("`Layer::forward` must be called before `BackPropagation::backprop`");
-
-        pass_gradient(input, &mut output_gradient, &mut |input| input > 0.0);
+        pass_gradient(&self.input, &mut output_gradient, &mut relu_active);
 
         self.data.backprop(output_gradient);
     }
@@ -65,7 +66,11 @@ where
     }
 }
 
-trait Activatable: Clone {
+pub fn relu_active(sample: f32) -> bool {
+    sample > 0.0
+}
+
+pub trait Activatable: Clone {
     fn iter(&self) -> impl Iterator<Item = &f32>;
 
     fn iter_mut(&mut self) -> impl Iterator<Item = &mut f32>;
@@ -95,7 +100,7 @@ impl Activatable for Image {
     }
 }
 
-fn activation<Input, Map>(input: &Input, map: &mut Map) -> Input
+pub fn activation<Input, Map>(input: &Input, map: &mut Map) -> Input
 where
     Input: Activatable,
     Map: FnMut(&mut f32),

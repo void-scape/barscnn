@@ -61,9 +61,9 @@ pub fn laplacian_3x3<const DEPTH: usize>() -> Filter<9, DEPTH> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Filter<const WEIGHTS: usize, const DEPTH: usize> {
-    size: usize,
-    weights: [[f32; WEIGHTS]; DEPTH],
-    bias: f32,
+    pub size: usize,
+    pub weights: [[f32; WEIGHTS]; DEPTH],
+    pub bias: f32,
 }
 
 impl<const WEIGHTS: usize, const DEPTH: usize> Filter<WEIGHTS, DEPTH> {
