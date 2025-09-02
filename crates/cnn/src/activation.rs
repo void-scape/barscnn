@@ -1,108 +1,134 @@
-use crate::image::Image;
-use crate::layer::{BackPropagation, Layer};
+use std::marker::PhantomData;
+
+use crate::Layer;
+use crate::matrix::Mat3d;
+
+pub const LEAKY_COEFF: f32 = 0.01;
 
 #[derive(Debug, Clone)]
-pub struct Relu<Data, Input> {
-    pub data: Data,
-    pub input: Input,
+pub struct Activation<T, F, const C: usize, const H: usize, const W: usize> {
+    pub layer: T,
+    input: Mat3d<C, H, W>,
+    _function: PhantomData<F>,
 }
 
-pub trait ReluData<Input>
+impl<T, F, const C: usize, const H: usize, const W: usize> Activation<T, F, C, H, W>
+where
+    F: ActivationFunction,
+{
+    pub fn activation(&self) -> Mat3d<C, H, W> {
+        activation(&self.input, &mut F::map)
+    }
+
+    pub fn activation_backprop(&self, matrix: Mat3d<C, H, W>) -> Mat3d<C, H, W> {
+        activation_backprop(&self.input, matrix, &mut F::backprop)
+    }
+
+    pub fn activation_mask(&self) -> Mat3d<C, H, W> {
+        activation(&self.input, &mut |v| {
+            *v = F::pass(*v) as u32 as f32;
+        })
+    }
+}
+
+pub trait ReluLayer<const C: usize, const H: usize, const W: usize>
 where
     Self: Sized,
-    Input: Default,
 {
-    fn relu(self) -> Relu<Self, Input>;
-}
+    fn relu_layer(self) -> Activation<Self, Relu, C, H, W> {
+        Activation {
+            layer: self,
+            input: Mat3d::zero(),
+            _function: PhantomData,
+        }
+    }
 
-impl<T, Input> ReluData<Input> for T
-where
-    T: Layer<Item = Input>,
-    Input: Default,
-{
-    fn relu(self) -> Relu<Self, Input> {
-        Relu {
-            data: self,
-            input: Input::default(),
+    fn leaky_relu_layer(self) -> Activation<Self, LeakyRelu, C, H, W> {
+        Activation {
+            layer: self,
+            input: Mat3d::zero(),
+            _function: PhantomData,
         }
     }
 }
 
-impl<T, Input> Layer for Relu<T, Input>
+impl<T, const C: usize, const H: usize, const W: usize> ReluLayer<C, H, W> for T where
+    T: Layer<Item = Mat3d<C, H, W>>
+{
+}
+
+pub trait ActivationFunction {
+    fn map(input: &mut f32);
+
+    fn backprop(input: f32, gradient: &mut f32);
+
+    fn pass(input: f32) -> bool;
+}
+
+pub struct Relu;
+
+impl ActivationFunction for Relu {
+    fn map(input: &mut f32) {
+        *input = input.max(0.0);
+    }
+
+    fn backprop(input: f32, gradient: &mut f32) {
+        if input <= 0.0 {
+            *gradient = 0.0;
+        }
+    }
+
+    fn pass(input: f32) -> bool {
+        input > 0.0
+    }
+}
+
+pub struct LeakyRelu;
+
+impl ActivationFunction for LeakyRelu {
+    fn map(input: &mut f32) {
+        *input = input.max(*input * LEAKY_COEFF);
+    }
+
+    fn backprop(input: f32, gradient: &mut f32) {
+        if input <= 0.0 {
+            *gradient *= LEAKY_COEFF;
+        }
+    }
+
+    fn pass(_: f32) -> bool {
+        true
+    }
+}
+
+impl<T, F, const C: usize, const H: usize, const W: usize> Layer for Activation<T, F, C, H, W>
 where
-    T: Layer<Item = Input>,
-    Input: Activatable,
+    T: Layer<Item = Mat3d<C, H, W>>,
+    F: ActivationFunction,
 {
     type Input = T::Input;
-    type Item = T::Item;
+    type Item = Mat3d<C, H, W>;
 
-    fn forward(&mut self, input: Self::Input) -> Self::Item {
-        let input = self.data.forward(input);
-        let result = activation(&input, &mut relu);
-        self.input = input;
-        result
+    fn input(&mut self, input: Self::Input) {
+        self.layer.input(input);
+    }
+
+    fn forward(&mut self) -> Self::Item {
+        self.input = self.layer.forward();
+        self.activation()
+    }
+
+    fn backprop(&mut self, output_gradient: Self::Item, learning_rate: f32) {
+        self.layer
+            .backprop(self.activation_backprop(output_gradient), learning_rate);
     }
 }
 
-pub fn relu(sample: &mut f32) {
-    *sample = sample.max(0.0);
-}
-
-impl<T, Input> BackPropagation for Relu<T, Input>
+pub fn activation<const C: usize, const H: usize, const W: usize, Map>(
+    input: &Mat3d<C, H, W>,
+    map: &mut Map,
+) -> Mat3d<C, H, W>
 where
-    T: BackPropagation<Gradient = Input>,
-    Input: Activatable,
-{
-    type Gradient = Input;
-
-    fn backprop(&mut self, mut output_gradient: Self::Gradient) {
-        pass_gradient(&self.input, &mut output_gradient, &mut relu_active);
-
-        self.data.backprop(output_gradient);
-    }
-
-    fn learning_rate(&self) -> f32 {
-        self.data.learning_rate()
-    }
-}
-
-pub fn relu_active(sample: f32) -> bool {
-    sample > 0.0
-}
-
-pub trait Activatable: Clone {
-    fn iter(&self) -> impl Iterator<Item = &f32>;
-
-    fn iter_mut(&mut self) -> impl Iterator<Item = &mut f32>;
-
-    fn zip(&mut self, other: &Self) -> impl Iterator<Item = (&mut f32, f32)> {
-        self.iter_mut().zip(other.iter().copied())
-    }
-}
-
-impl<const LEN: usize> Activatable for [f32; LEN] {
-    fn iter(&self) -> impl Iterator<Item = &f32> {
-        <_ as IntoIterator>::into_iter(self)
-    }
-
-    fn iter_mut(&mut self) -> impl Iterator<Item = &mut f32> {
-        <_ as IntoIterator>::into_iter(self)
-    }
-}
-
-impl Activatable for Image {
-    fn iter(&self) -> impl Iterator<Item = &f32> {
-        self.pixels.iter()
-    }
-
-    fn iter_mut(&mut self) -> impl Iterator<Item = &mut f32> {
-        self.pixels.iter_mut()
-    }
-}
-
-pub fn activation<Input, Map>(input: &Input, map: &mut Map) -> Input
-where
-    Input: Activatable,
     Map: FnMut(&mut f32),
 {
     let mut output = input.clone();
@@ -110,32 +136,47 @@ where
     output
 }
 
-fn pass_gradient<Input, Pass>(input: &Input, gradient: &mut Input, pass: &mut Pass)
+pub fn activation_backprop<const C: usize, const H: usize, const W: usize, Backprop>(
+    original: &Mat3d<C, H, W>,
+    input: Mat3d<C, H, W>,
+    backprop: &mut Backprop,
+) -> Mat3d<C, H, W>
 where
-    Input: Activatable,
-    Pass: FnMut(f32) -> bool,
+    Backprop: FnMut(f32, &mut f32),
 {
-    gradient.zip(input).for_each(|(g, i)| {
-        if !pass(i) {
-            *g = 0.0;
-        }
-    });
+    let mut output = input;
+    for (input, original) in output.iter_mut().zip(original.iter()) {
+        backprop(*original, input);
+    }
+    output
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
 
+    fn backprop<F: ActivationFunction>(_: F, mut gradient: f32, input: f32, expected: f32) {
+        let g = &mut gradient;
+        F::backprop(input, g);
+        assert_eq!(*g, expected);
+    }
+
     #[test]
     fn relu() {
-        let input = [-1.0, 0.0, 1.0, 2.0];
+        let input = Mat3d::<1, 1, 4>::new([-1.0, 0.0, 1.0, 2.0]);
+        let output = input.clone().relu_layer().forward();
+        assert_eq!(output, Mat3d::<1, 1, 4>::new([0.0, 0.0, 1.0, 2.0]));
 
-        let output = input.relu().forward(());
-        assert_eq!(output, [0.0, 0.0, 1.0, 2.0]);
+        let output = input.leaky_relu_layer().forward();
+        assert_eq!(
+            output,
+            Mat3d::<1, 1, 4>::new([-1.0 * LEAKY_COEFF, 0.0, 1.0, 2.0])
+        );
 
-        let mut output = [-1.0, 1.0, 2.0, -1.0];
-        pass_gradient(&input, &mut output, &mut |input| input > 0.0);
+        backprop(Relu, 10.0, 1.0, 10.0);
+        backprop(Relu, 10.0, -1.0, 0.0);
 
-        assert_eq!(output, [0.0, 0.0, 2.0, -1.0]);
+        backprop(LeakyRelu, 10.0, 1.0, 10.0);
+        backprop(LeakyRelu, 10.0, -1.0, 10.0 * LEAKY_COEFF);
     }
 }

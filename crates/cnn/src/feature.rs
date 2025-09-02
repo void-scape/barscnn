@@ -1,80 +1,81 @@
-use crate::filter::{Filter, conv_padded};
-use crate::image::Image;
-use crate::layer::{BackPropagation, Layer};
+use crate::Layer;
+use crate::filter::Filter;
+use crate::matrix::Mat3d;
 
 #[derive(Debug, Clone)]
-pub struct FeatureMap<Data, const WEIGHTS: usize, const DEPTH: usize, const WIDTH: usize> {
-    pub data: Data,
-    pub filters: [Filter<WEIGHTS, DEPTH>; WIDTH],
-    pub input: Image,
+pub struct FeatureMap<
+    T,
+    const S: usize,
+    const C: usize,
+    const H: usize,
+    const W: usize,
+    const L: usize,
+> {
+    pub layer: T,
+    filters: [Filter<S, C>; L],
+    input: Mat3d<C, H, W>,
 }
 
-pub trait FeatureMapData<Data, const WEIGHTS: usize, const DEPTH: usize, const WIDTH: usize>
-where
+impl<T, const S: usize, const C: usize, const H: usize, const W: usize, const L: usize>
+    FeatureMap<T, S, C, H, W, L>
+{
+    pub fn feature_map(&self) -> Mat3d<L, { H - S + 1 }, { W - S + 1 }> {
+        crate::filter::conv(&self.input, &self.filters)
+    }
+}
+
+pub trait FeatureMapLayer<
+    const S: usize,
+    const C: usize,
+    const H: usize,
+    const W: usize,
+    const L: usize,
+> where
     Self: Sized,
 {
-    fn feature_map(
-        self,
-        filters: [Filter<WEIGHTS, DEPTH>; WIDTH],
-    ) -> FeatureMap<Self, WEIGHTS, DEPTH, WIDTH>;
+    fn feature_map_layer(self, filters: [Filter<S, C>; L]) -> FeatureMap<Self, S, C, H, W, L>;
 }
 
-impl<T, const WEIGHTS: usize, const DEPTH: usize, const WIDTH: usize>
-    FeatureMapData<T, WEIGHTS, DEPTH, WIDTH> for T
+impl<T, const S: usize, const C: usize, const H: usize, const W: usize, const L: usize>
+    FeatureMapLayer<S, C, H, W, L> for T
 {
-    fn feature_map(
-        self,
-        filters: [Filter<WEIGHTS, DEPTH>; WIDTH],
-    ) -> FeatureMap<T, WEIGHTS, DEPTH, WIDTH> {
+    fn feature_map_layer(self, filters: [Filter<S, C>; L]) -> FeatureMap<Self, S, C, H, W, L> {
         FeatureMap {
-            data: self,
-            input: Image::default(),
+            layer: self,
             filters,
+            input: Mat3d::zero(),
         }
     }
 }
 
-impl<T, const WEIGHTS: usize, const DEPTH: usize, const WIDTH: usize> Layer
-    for FeatureMap<T, WEIGHTS, DEPTH, WIDTH>
+impl<T, const S: usize, const C: usize, const H: usize, const W: usize, const L: usize> Layer
+    for FeatureMap<T, S, C, H, W, L>
 where
-    T: Layer<Item = Image>,
+    T: Layer<Item = Mat3d<C, H, W>>,
+    [(); H - S + 1]:,
+    [(); W - S + 1]:,
 {
     type Input = T::Input;
-    type Item = Image;
+    type Item = Mat3d<L, { H - S + 1 }, { W - S + 1 }>;
 
-    fn forward(&mut self, input: Self::Input) -> Self::Item {
-        let input = self.data.forward(input);
-        let result = conv_padded(&input, &self.filters);
-        self.input = input;
-        result
-    }
-}
-
-impl<T, const WEIGHTS: usize, const DEPTH: usize, const WIDTH: usize> BackPropagation
-    for FeatureMap<T, WEIGHTS, DEPTH, WIDTH>
-where
-    T: BackPropagation<Gradient = Image>,
-{
-    type Gradient = Image;
-
-    fn backprop(&mut self, output_gradient: Self::Gradient) {
-        let input = &self.input;
-        let mut gradient = Image {
-            width: input.width,
-            height: input.height,
-            channels: input.channels,
-            pixels: vec![0.0; input.pixels.len()],
-        };
-
-        let learning_rate = self.learning_rate();
-        for (i, filter) in self.filters.iter_mut().enumerate() {
-            filter.apply_gradients(input, &output_gradient, &mut gradient, i, learning_rate);
-        }
-
-        self.data.backprop(gradient);
+    fn input(&mut self, input: Self::Input) {
+        self.layer.input(input);
     }
 
-    fn learning_rate(&self) -> f32 {
-        self.data.learning_rate()
+    fn forward(&mut self) -> Self::Item {
+        self.input = self.layer.forward();
+        self.feature_map()
+    }
+
+    fn backprop(&mut self, output_gradient: Self::Item, learning_rate: f32) {
+        self.layer.backprop(
+            crate::filter::apply_filter_gradients(
+                &mut self.filters,
+                &self.input,
+                &output_gradient,
+                learning_rate,
+            ),
+            learning_rate,
+        );
     }
 }

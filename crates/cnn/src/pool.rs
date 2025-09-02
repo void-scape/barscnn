@@ -1,96 +1,101 @@
-use crate::image::Image;
-use crate::layer::{BackPropagation, Layer};
+use crate::Layer;
+use crate::matrix::Mat3d;
 
 #[derive(Debug, Clone)]
-pub struct MaxPool<Data> {
-    pub data: Data,
-    pub size: usize,
-    pub input: Image,
+pub struct MaxPool<T, const SIZE: usize, const C: usize, const H: usize, const W: usize> {
+    pub layer: T,
+    input: Mat3d<C, H, W>,
 }
 
-pub trait MaxPoolData
+impl<T, const SIZE: usize, const C: usize, const H: usize, const W: usize>
+    MaxPool<T, SIZE, C, H, W>
+{
+    #[doc(hidden)]
+    const NON_ZERO_SIZE: () = assert!(SIZE != 0, "`SIZE` must be greater than 0");
+
+    #[doc(hidden)]
+    const SIZE_CONSTRAINTS: () = assert!(
+        H >= SIZE && W >= SIZE,
+        "`H` and `W` must be larger than or equal to `SIZE`"
+    );
+
+    fn max_pool(&self) -> Mat3d<C, { H / SIZE }, { W / SIZE }> {
+        max_pool::<SIZE, _, _, _>(&self.input)
+    }
+
+    fn max_unpool(&self, matrix: Mat3d<C, { H / SIZE }, { W / SIZE }>) -> Mat3d<C, H, W> {
+        max_unpool::<SIZE, _, _, _>(&self.input, &matrix)
+    }
+}
+
+pub trait MaxPoolLayer<const C: usize, const H: usize, const W: usize>
 where
     Self: Sized,
 {
-    fn max_pool(self, size: usize) -> MaxPool<Self>;
+    fn max_pool_layer<const SIZE: usize>(self) -> MaxPool<Self, SIZE, C, H, W>;
 }
 
-impl<T> MaxPoolData for T
+impl<T, const C: usize, const H: usize, const W: usize> MaxPoolLayer<C, H, W> for T
 where
-    T: Layer<Item = Image>,
+    T: Layer,
 {
-    fn max_pool(self, size: usize) -> MaxPool<Self> {
+    fn max_pool_layer<const SIZE: usize>(self) -> MaxPool<Self, SIZE, C, H, W> {
+        let _invalid_pool_size = MaxPool::<Self, SIZE, C, H, W>::NON_ZERO_SIZE;
+        let _invalid_pool_size = MaxPool::<Self, SIZE, C, H, W>::SIZE_CONSTRAINTS;
         MaxPool {
-            data: self,
-            size,
-            input: Image::default(),
+            layer: self,
+            input: Mat3d::zero(),
         }
     }
 }
 
-impl<T> Layer for MaxPool<T>
+impl<T, const SIZE: usize, const C: usize, const H: usize, const W: usize> Layer
+    for MaxPool<T, SIZE, C, H, W>
 where
-    T: Layer<Item = Image>,
+    T: Layer<Item = Mat3d<C, H, W>>,
+    [(); H / SIZE]:,
+    [(); W / SIZE]:,
 {
     type Input = T::Input;
-    type Item = T::Item;
+    type Item = Mat3d<C, { H / SIZE }, { W / SIZE }>;
 
-    fn forward(&mut self, input: Self::Input) -> Self::Item {
-        let input = self.data.forward(input);
-        let result = max_pool(&input, self.size);
-        self.input = input;
-        result
+    fn input(&mut self, input: Self::Input) {
+        self.layer.input(input);
+    }
+
+    fn forward(&mut self) -> Self::Item {
+        self.input = self.layer.forward();
+        self.max_pool()
+    }
+
+    fn backprop(&mut self, output_gradient: Self::Item, learning_rate: f32) {
+        self.layer
+            .backprop(self.max_unpool(output_gradient), learning_rate);
     }
 }
 
-impl<T> BackPropagation for MaxPool<T>
-where
-    T: BackPropagation<Gradient = Image>,
-{
-    type Gradient = Image;
+pub fn max_pool<const SIZE: usize, const C: usize, const H: usize, const W: usize>(
+    input: &Mat3d<C, H, W>,
+) -> Mat3d<C, { H / SIZE }, { W / SIZE }> {
+    debug_assert!(SIZE != 0);
+    debug_assert!(SIZE <= W && SIZE <= H);
 
-    fn backprop(&mut self, output_gradient: Self::Gradient) {
-        self.data
-            .backprop(max_pool_reshape(&self.input, &output_gradient, self.size));
-    }
-
-    fn learning_rate(&self) -> f32 {
-        self.data.learning_rate()
-    }
-}
-
-pub fn max_pool(input: &Image, size: usize) -> Image {
-    assert!(size != 0);
-
-    debug_assert_eq!(
-        input.width * input.height * input.channels,
-        input.pixels.len()
-    );
-    debug_assert!(size <= input.width && size <= input.height);
-
-    let width = input.width / size;
-    let height = input.height / size;
-    let channels = input.channels;
-    let mut output = Image {
-        width,
-        height,
-        channels,
-        pixels: vec![0.0; width * height * channels],
-    };
+    let width = W / SIZE;
+    let height = H / SIZE;
+    let channels = C;
+    let mut output = Mat3d::<C, { H / SIZE }, { W / SIZE }>::zero();
 
     for mh in 0..height {
         for mw in 0..width {
             for c in 0..channels {
                 let mut max = f32::MIN;
-                for h in 0..size {
-                    for w in 0..size {
-                        let pixel = input.pixels[((mh * size + h) * input.width + (mw * size + w))
-                            * input.channels
-                            + c];
+                for h in 0..SIZE {
+                    for w in 0..SIZE {
+                        let pixel = input.chw(c, mh * SIZE + h, mw * SIZE + w);
                         max = pixel.max(max);
                     }
                 }
-                output.pixels[(mh * width + mw) * channels + c] = max;
+                *output.chw_mut(c, mh, mw) = max;
             }
         }
     }
@@ -98,50 +103,35 @@ pub fn max_pool(input: &Image, size: usize) -> Image {
     output
 }
 
-fn max_pool_reshape(original: &Image, pooled: &Image, size: usize) -> Image {
-    assert!(size != 0);
-    assert_eq!(original.channels, pooled.channels);
+fn max_unpool<const SIZE: usize, const C: usize, const H: usize, const W: usize>(
+    original: &Mat3d<C, H, W>,
+    pooled: &Mat3d<C, { H / SIZE }, { W / SIZE }>,
+) -> Mat3d<C, H, W> {
+    debug_assert!(SIZE != 0);
+    debug_assert!(SIZE <= W && SIZE <= H);
 
-    debug_assert_eq!(
-        original.width * original.height * original.channels,
-        original.pixels.len()
-    );
-    debug_assert_eq!(
-        pooled.width * pooled.height * pooled.channels,
-        pooled.pixels.len()
-    );
-    debug_assert_eq!(pooled.width, original.width / size);
-    debug_assert!(size <= original.width && size <= original.height);
-
-    let mut output = Image {
-        width: original.width,
-        height: original.height,
-        channels: original.channels,
-        pixels: vec![0.0; original.width * original.height * original.channels],
-    };
-
-    for mh in 0..pooled.height {
-        for mw in 0..pooled.width {
-            for c in 0..pooled.channels {
+    let mut output = Mat3d::zero();
+    for mh in 0..H / SIZE {
+        for mw in 0..W / SIZE {
+            for c in 0..C {
                 let mut max = f32::MIN;
-                let mut i = 0;
-                for h in 0..size {
-                    for w in 0..size {
-                        let index = ((mh * size + h) * original.width + (mw * size + w))
-                            * original.channels
-                            + c;
-                        let pixel = original.pixels[index];
+                let mut i = (0, 0, 0);
+                for h in 0..SIZE {
+                    for w in 0..SIZE {
+                        let h = mh * SIZE + h;
+                        let w = mw * SIZE + w;
+
+                        let pixel = original.chw(c, h, w);
                         if pixel > max {
                             max = pixel;
-                            i = index;
+                            i = (c, h, w);
                         }
                     }
                 }
-                output.pixels[i] = pooled.pixels[(mh * pooled.width + mw) * original.channels + c];
+                *output.chw_mut(i.0, i.1, i.2) = pooled.chw(c, mh, mw);
             }
         }
     }
-
     output
 }
 
@@ -151,47 +141,28 @@ mod test {
 
     #[test]
     fn fuzz() {
-        for pool in 1..5 {
-            for y in 5..64 {
-                for x in 5..64 {
-                    let image = Image {
-                        width: x,
-                        height: y,
-                        channels: 1,
-                        pixels: (0..x * y).map(|p| p as f32).collect(),
-                    };
-                    max_pool(&image, pool);
-                }
-            }
-        }
+        // TODO: Const matrices make this kind of robustness check hard.
+        max_pool::<1, _, _, _>(&Mat3d::<2, 3, 6>::zero());
+        max_pool::<2, _, _, _>(&Mat3d::<1, 9, 2>::zero());
+        max_pool::<3, _, _, _>(&Mat3d::<2, 293, 4>::zero());
+        max_pool::<4, _, _, _>(&Mat3d::<1, 4, 4>::zero());
     }
 
     #[test]
     fn max_pool_5x3_2() {
-        let image = Image {
-            width: 5,
-            height: 3,
-            channels: 1,
-            #[rustfmt::skip]
-            pixels: vec![
-                0.1, 0.2, 0.3, 0.4, 0.5,
-                0.2, 0.3, 0.4, 0.5, 0.6,
-                0.3, 0.4, 0.5, 0.6, 0.7,
-            ],
-        };
+        #[rustfmt::skip]
+        let input = Mat3d::<1, 3, 5>::new([
+            0.1, 0.2, 0.3, 0.4, 0.5,
+            0.2, 0.3, 0.4, 0.5, 0.6,
+            0.3, 0.4, 0.5, 0.6, 0.7,
+        ]);
+        let result = max_pool::<2, _, _, _>(&input);
+        assert_eq!(result.as_slice(), &[0.3, 0.5]);
 
-        let result = max_pool(&image, 2);
-
-        assert_eq!(result.width, 2);
-        assert_eq!(result.height, 1);
-        assert_eq!(result.pixels.len(), 2);
-        assert_eq!(result.pixels.as_slice(), &[0.3, 0.5]);
-
-        let unmax = max_pool_reshape(&image, &result, 2);
-
+        let result = max_unpool::<2, _, _, _>(&input, &result);
         #[rustfmt::skip]
         assert_eq!(
-            unmax.pixels.as_slice(),
+            result.as_slice(),
             &[
                 0.0, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.3, 0.0, 0.5, 0.0,

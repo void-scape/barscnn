@@ -1,3 +1,5 @@
+use crate::matrix::Mat3d;
+
 pub mod bmp;
 
 #[derive(Debug, Default, Clone)]
@@ -15,6 +17,11 @@ impl Image {
             height: self.height,
             channels: self.channels,
         }
+    }
+
+    pub fn into_matrix<const C: usize, const H: usize, const W: usize>(self) -> Mat3d<C, H, W> {
+        assert_eq!(self.width * self.height * self.channels, self.pixels.len());
+        Mat3d::from_vec(self.pixels)
     }
 }
 

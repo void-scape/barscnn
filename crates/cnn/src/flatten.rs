@@ -1,69 +1,61 @@
-use std::marker::PhantomData;
-
-use crate::image::Image;
-use crate::layer::{BackPropagation, Layer};
+use crate::Layer;
+use crate::matrix::Mat3d;
 
 #[derive(Debug, Clone)]
-pub struct Flatten<Data, const LEN: usize> {
-    pub data: Data,
-    pub input: Image,
-    _len: PhantomData<[f32; LEN]>,
+pub struct Flatten<T, const C: usize, const H: usize, const W: usize> {
+    pub layer: T,
+    input: Mat3d<C, H, W>,
 }
 
-pub trait FlattenData
+impl<T, const C: usize, const H: usize, const W: usize> Flatten<T, C, H, W> {
+    pub fn flatten(&self) -> Mat3d<1, 1, { C * H * W }> {
+        self.input.clone().reshape()
+    }
+
+    pub fn unflatten(&self, matrix: Mat3d<1, 1, { C * H * W }>) -> Mat3d<C, H, W> {
+        matrix.reshape()
+    }
+}
+
+pub trait FlattenLayer<const C: usize, const H: usize, const W: usize>
 where
     Self: Sized,
 {
-    fn flatten<const LEN: usize>(self) -> Flatten<Self, LEN>;
+    fn flatten_layer(self) -> Flatten<Self, C, H, W>;
 }
 
-impl<T> FlattenData for T
+impl<T, const C: usize, const H: usize, const W: usize> FlattenLayer<C, H, W> for T
 where
     T: Layer,
 {
-    fn flatten<const LEN: usize>(self) -> Flatten<Self, LEN> {
+    fn flatten_layer(self) -> Flatten<Self, C, H, W> {
         Flatten {
-            data: self,
-            input: Image::default(),
-            _len: PhantomData,
+            layer: self,
+            input: Mat3d::zero(),
         }
     }
 }
 
-impl<Data, const LEN: usize> Layer for Flatten<Data, LEN>
+impl<T, const C: usize, const H: usize, const W: usize> Layer for Flatten<T, C, H, W>
 where
-    Data: Layer<Item = Image>,
+    T: Layer<Item = Mat3d<C, H, W>>,
+    [(); C * H * W]:,
 {
-    type Input = Data::Input;
-    type Item = [f32; LEN];
+    type Input = T::Input;
+    type Item = Mat3d<1, 1, { C * H * W }>;
 
-    fn forward(&mut self, input: Self::Input) -> Self::Item {
-        let image = self.data.forward(input);
-        assert_eq!(image.pixels.len(), LEN);
-        let result = image.pixels.as_slice().try_into().unwrap();
-        self.input = image;
-        result
-    }
-}
-
-impl<T, const LEN: usize> BackPropagation for Flatten<T, LEN>
-where
-    T: Layer + BackPropagation<Gradient = Image>,
-{
-    type Gradient = [f32; LEN];
-
-    fn backprop(&mut self, output_gradient: Self::Gradient) {
-        let shape = self.input.shape();
-        assert_eq!(shape.width * shape.height * shape.channels, LEN);
-        self.data.backprop(Image {
-            width: shape.width,
-            height: shape.height,
-            channels: shape.channels,
-            pixels: output_gradient.to_vec(),
-        });
+    fn input(&mut self, input: Self::Input) {
+        self.layer.input(input);
     }
 
-    fn learning_rate(&self) -> f32 {
-        self.data.learning_rate()
+    fn forward(&mut self) -> Self::Item {
+        let input = self.layer.forward();
+        self.input = input.clone();
+        self.flatten()
+    }
+
+    fn backprop(&mut self, output_gradient: Self::Item, learning_rate: f32) {
+        self.layer
+            .backprop(self.unflatten(output_gradient), learning_rate);
     }
 }
