@@ -22,6 +22,14 @@ impl<T, const S: usize, const C: usize, const H: usize, const W: usize, const L:
     pub fn feature_map(&self) -> Mat3d<L, { H - S + 1 }, { W - S + 1 }> {
         crate::filter::conv(&self.input, &self.filters)
     }
+
+    pub fn filters(&self) -> &[Filter<S, C>; L] {
+        &self.filters
+    }
+
+    pub fn layer_input(&self) -> &Mat3d<C, H, W> {
+        &self.input
+    }
 }
 
 pub trait FeatureMapLayer<

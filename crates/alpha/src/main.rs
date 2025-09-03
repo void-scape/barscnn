@@ -1,4 +1,6 @@
-// use bevy::log::{Level, LogPlugin};
+#![feature(generic_const_exprs)]
+#![allow(incomplete_features)]
+
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
 use bevy_prng::WyRand;
@@ -10,25 +12,19 @@ mod viz;
 
 const WIDTH: f32 = 1000.0;
 const HEIGHT: f32 = 750.0;
+const SEED: u64 = 123;
 
 fn main() {
-    let seed: u64 = 234;
-
     App::default()
         .add_plugins((
-            DefaultPlugins
-                // .set(LogPlugin {
-                //     level: Level::DEBUG,
-                //     ..Default::default()
-                // })
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        resolution: WindowResolution::new(WIDTH, HEIGHT),
-                        ..Default::default()
-                    }),
+            DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    resolution: WindowResolution::new(WIDTH, HEIGHT),
                     ..Default::default()
                 }),
-            bevy_rand::plugin::EntropyPlugin::<WyRand>::with_seed(seed.to_ne_bytes()),
+                ..Default::default()
+            }),
+            bevy_rand::plugin::EntropyPlugin::<WyRand>::with_seed(SEED.to_ne_bytes()),
         ))
         .add_plugins((training::plugin, viz::plugin))
         .add_systems(Update, close_on_escape)
@@ -55,36 +51,27 @@ fn spawn(mut commands: Commands) {
 
     use cnn::prelude::*;
 
-    const FILT1: usize = 8;
-    let filt1: [_; FILT1] = [
-        // filter::uniform_3x3::<1>(); FILT1
-        //
-        filter::vertical_sobel::<1>(),
-        filter::horizontal_sobel(),
-        filter::gaussian_blur_3x3(),
-        filter::laplacian_3x3(),
-        filter::identity(),
-        filter::uniform_3x3(),
-        filter::vertical_sobel(),
-        filter::horizontal_sobel(),
-    ];
-    // const FILT2: usize = 4;
-    // let mut filt2 = [filter::identity(); FILT2];
+    let f1 = filter::feature_set::<12, 5, _>(|i| filter::xavier(SEED + i as u64));
+    let f1_len = f1.len();
+    let f2 = filter::feature_set::<24, 5, _>(|i| filter::xavier(SEED + i as u64 + f1_len as u64));
 
-    const INPUT: usize = 1568;
-    let fc1 = FcWeights::<INPUT, 26>::glorot();
-    // let mut fc2 = FcWeights::<_, 64>::glorot();
-    // let mut fc3 = FcWeights::<_, 26>::glorot();
+    let fc1 = FcWeights::glorot(SEED);
+    let fc2 = FcWeights::glorot(SEED + 1);
+    let fc3 = FcWeights::glorot(SEED + 2);
 
-    let cnn = ImageCnn::learning_rate(0.001)
-        .feature_map(filt1)
-        .relu()
-        .max_pool(2)
-        // .feature_map(&mut filt2)
-        // .relu()
-        // .max_pool(2)
-        .flatten()
-        .fully_connected(fc1)
-        .softmax();
+    let cnn = Cnn::<1, 32, 32>::default()
+        .feature_map_layer(f1)
+        .leaky_relu_layer()
+        .max_pool_layer::<2>()
+        .feature_map_layer(f2)
+        .leaky_relu_layer()
+        .max_pool_layer::<2>()
+        .flatten_layer()
+        .fully_connected_layer::<256>(fc1)
+        .leaky_relu_layer()
+        .fully_connected_layer::<128>(fc2)
+        .leaky_relu_layer()
+        .fully_connected_layer(fc3)
+        .softmax_layer();
     commands.spawn((Name::new("av1"), Network(cnn)));
 }

@@ -19,12 +19,16 @@ impl<T, const SIZE: usize, const C: usize, const H: usize, const W: usize>
         "`H` and `W` must be larger than or equal to `SIZE`"
     );
 
-    fn max_pool(&self) -> Mat3d<C, { H / SIZE }, { W / SIZE }> {
+    pub fn max_pool(&self) -> Mat3d<C, { H / SIZE }, { W / SIZE }> {
         max_pool::<SIZE, _, _, _>(&self.input)
     }
 
-    fn max_unpool(&self, matrix: Mat3d<C, { H / SIZE }, { W / SIZE }>) -> Mat3d<C, H, W> {
+    pub fn max_unpool(&self, matrix: Mat3d<C, { H / SIZE }, { W / SIZE }>) -> Mat3d<C, H, W> {
         max_unpool::<SIZE, _, _, _>(&self.input, &matrix)
+    }
+
+    pub fn layer_input(&self) -> &Mat3d<C, H, W> {
+        &self.input
     }
 }
 

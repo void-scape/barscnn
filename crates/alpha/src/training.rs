@@ -1,5 +1,4 @@
 use std::marker::PhantomData;
-use std::time::Duration;
 
 use bevy::ecs::component::HookContext;
 use bevy::ecs::system::SystemId;
@@ -7,12 +6,16 @@ use bevy::ecs::world::DeferredWorld;
 use bevy::prelude::*;
 use bevy_prng::WyRand;
 use bevy_rand::prelude::*;
-use cnn::linear::Softmax;
+use cnn::matrix::{Mat1d, Mat2d};
 use cnn::prelude::*;
+use cnn::softmax::Softmax;
 use rand::Rng;
 
 use crate::AlphaState;
 use crate::viz::{InspectorUi, Textures, VizUpdateSystem};
+
+const DATA_PERCENTAGE: f32 = 0.25;
+const IMAGE_SIZE: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
 pub struct TrainSet;
@@ -30,24 +33,24 @@ pub fn plugin(app: &mut App) {
                 force_texture_update,
             )
                 // .run_if(run_at_freq(1.0))
-                .run_if(run_at_freq(1.0 / 30.0))
+                // .run_if(run_at_freq(1.0 / 60.0))
                 .chain()
                 .in_set(TrainSet)
                 .run_if(in_state(AlphaState::Train)),
         );
 }
 
-fn run_at_freq(freq: f32) -> impl Fn(Res<Time>, Local<Timer>) -> bool {
-    move |time, mut timer| {
-        timer.tick(time.delta());
-        let result = timer.just_finished();
-        if result {
-            timer.set_duration(Duration::from_secs_f32(freq));
-            timer.set_mode(TimerMode::Repeating);
-        }
-        result
-    }
-}
+// fn run_at_freq(freq: f32) -> impl Fn(Res<Time>, Local<Timer>) -> bool {
+//     move |time, mut timer| {
+//         timer.tick(time.delta());
+//         let result = timer.just_finished();
+//         if result {
+//             timer.set_duration(std::time::Duration::from_secs_f32(freq));
+//             timer.set_mode(TimerMode::Repeating);
+//         }
+//         result
+//     }
+// }
 
 #[derive(Component)]
 pub struct Training;
@@ -62,8 +65,7 @@ pub trait LetterCnn:
     Send
     + Sync
     + InspectorUi
-    + Layer<Input = cnn::image::Image, Item = [f32; 26]>
-    + BackPropagation
+    + Layer<Input = Mat2d<IMAGE_SIZE, IMAGE_SIZE>, Item = Mat1d<26>>
     + BackPropagateLetter
     + 'static
 {
@@ -73,8 +75,7 @@ impl<T> LetterCnn for T where
     T: Send
         + Sync
         + InspectorUi
-        + Layer<Input = cnn::image::Image, Item = [f32; 26]>
-        + BackPropagation
+        + Layer<Input = Mat2d<IMAGE_SIZE, IMAGE_SIZE>, Item = Mat1d<26>>
         + BackPropagateLetter
         + 'static
 {
@@ -134,15 +135,17 @@ fn run_network_systems(
 }
 
 pub trait BackPropagateLetter {
-    fn backprop_letter(&mut self, letter_index: usize, result: [f32; 26]);
+    fn backprop_letter(&mut self, letter_index: usize, result: Mat1d<26>, learning_rate: f32);
 }
 
 impl<Data> BackPropagateLetter for Softmax<Data, 26>
 where
-    Softmax<Data, 26>: BackPropagation<Gradient = [f32; 26]>,
+    Softmax<Data, 26>: Layer<Item = Mat1d<26>>,
 {
-    fn backprop_letter(&mut self, letter_index: usize, result: [f32; 26]) {
-        self.backprop_index(letter_index, result);
+    fn backprop_letter(&mut self, letter_index: usize, result: Mat1d<26>, learning_rate: f32) {
+        let mut output_gradient = result;
+        output_gradient[letter_index] -= 1.0;
+        self.backprop(output_gradient, learning_rate);
     }
 }
 
@@ -158,14 +161,15 @@ fn forward<Data, N, const TRAIN: bool>(
 
     let training_index = entropy.random_range(0..data.0.len());
     let sample = data.0[training_index].clone();
-    let result = cnn.0.forward(sample.image);
+    cnn.0.input(sample.image);
+    let result = cnn.0.forward();
     if TRAIN {
-        cnn.0.backprop_letter(sample.letter_index, result);
+        cnn.0
+            .backprop_letter(sample.letter_index, result.clone(), 0.00001);
     }
 
     for entity in children.iter() {
         if let Ok(mut tresult) = results.get_mut(entity) {
-            tresult.softmax = result;
             tresult.target = sample.letter_index;
             tresult.result = result
                 .iter()
@@ -173,6 +177,7 @@ fn forward<Data, N, const TRAIN: bool>(
                 .max_by(|(_, a), (_, b)| a.total_cmp(b))
                 .map(|(i, _)| i)
                 .unwrap();
+            tresult.softmax = result;
             return;
         }
     }
@@ -184,10 +189,10 @@ fn forward<Data, N, const TRAIN: bool>(
 pub struct ForwardResult {
     pub target: usize,
     pub result: usize,
-    pub softmax: [f32; 26],
+    pub softmax: Mat1d<26>,
 }
 
-#[derive(Default, Component)]
+#[derive(Default, Clone, Copy, Component)]
 pub struct Accuracy {
     pub predicted: usize,
     pub iteration: usize,
@@ -225,7 +230,7 @@ impl Loss {
 
 fn loss(mut networks: Query<(&ForwardResult, &mut Loss)>) {
     for (result, mut loss) in networks.iter_mut() {
-        loss.tick = -result.softmax[result.result].ln();
+        loss.tick = -result.softmax[result.target].ln();
         loss.accumulation += loss.tick;
         loss.iteration += 1;
     }
@@ -263,7 +268,7 @@ pub struct TrainingData(pub Vec<Sample>);
 #[derive(Clone)]
 pub struct Sample {
     pub letter_index: usize,
-    pub image: cnn::image::Image,
+    pub image: Mat2d<IMAGE_SIZE, IMAGE_SIZE>,
 }
 
 fn training_data(mut commands: Commands) {
@@ -278,7 +283,7 @@ fn training_data(mut commands: Commands) {
     )
     .unwrap();
 
-    let amt = 0.01;
+    let amt = DATA_PERCENTAGE;
     let progress = indicatif::ProgressBar::new((len as f32 * amt) as u64);
     std::thread::scope(|s| {
         let h1 = s.spawn(|| TrainingData(read_letters(&progress, 0.6 * amt, 0.0 * amt)));
@@ -333,7 +338,10 @@ fn read_letters(progress: &indicatif::ProgressBar, percentage: f32, offset: f32)
             progress.inc(1);
             samples.push(Sample {
                 letter_index,
-                image: cnn::image::bmp::from_bytes(&bytes).unwrap(),
+                image: cnn::image::bmp::from_bytes(&bytes)
+                    .unwrap()
+                    .into_matrix::<1, 28, 28>()
+                    .pad::<2>(),
             });
         }
     }

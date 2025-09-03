@@ -10,13 +10,14 @@ use bevy_egui::egui::{
 };
 use bevy_egui::{EguiContext, PrimaryEguiContext};
 use bevy_egui::{EguiPrimaryContextPass, egui};
-use cnn::ImageCnn;
-use cnn::activation::{Relu, relu_active};
+use cnn::Cnn;
+use cnn::activation::{Activation, ActivationFunction};
+use cnn::fc::FullyConnected;
 use cnn::feature::FeatureMap;
 use cnn::flatten::Flatten;
-use cnn::image::Shape;
-use cnn::linear::{FullyConnected, Softmax};
+use cnn::matrix::{Mat1d, Mat3d};
 use cnn::pool::MaxPool;
+use cnn::softmax::Softmax;
 use egui_plot::{Plot, PlotPoint, Points};
 
 use crate::training::{Accuracy, Epoch, Evaluation, IterationsPerEpoch, LetterCnn, Loss, Network};
@@ -52,7 +53,14 @@ fn viz_update(mut commands: Commands, update: Query<&VizUpdateSystem>) {
 #[derive(Default, Resource)]
 struct EvalPoints {
     acc: Vec<PlotPoint>,
+    epoch_acc: usize,
+    epoch_min_acc: f32,
+    epoch_max_acc: f32,
+
     loss: Vec<PlotPoint>,
+    epoch_loss: usize,
+    epoch_min_loss: f32,
+    epoch_max_loss: f32,
 }
 
 fn viz_evaluation(world: &mut World) {
@@ -64,27 +72,102 @@ fn viz_evaluation(world: &mut World) {
     };
     let mut egui_context = egui_context.clone();
 
-    let loss = world
-        .query_filtered::<Ref<Loss>, With<Evaluation>>()
+    let (loss, loss_epoch) = world
+        .query_filtered::<(Ref<Loss>, &Epoch), With<Evaluation>>()
         .single(world)
         .unwrap();
-    let iter_per_epoch = world.resource::<IterationsPerEpoch>().0;
-    let is_changed = loss.is_changed();
+    let loss_is_changed = loss.is_changed();
     let loss = *loss;
+    let loss_epoch = loss_epoch.0;
+
+    let (acc, acc_epoch) = world
+        .query_filtered::<(Ref<Accuracy>, &Epoch), With<Evaluation>>()
+        .single(world)
+        .unwrap();
+    let acc_is_changed = acc.is_changed();
+    let acc = *acc;
+    let acc_epoch = acc_epoch.0;
+
+    let iter_per_epoch = world.resource::<IterationsPerEpoch>().0;
 
     let mut points = world.resource_mut::<EvalPoints>();
-    if is_changed {
+    if loss_is_changed {
+        if points.epoch_loss != loss_epoch {
+            points.epoch_loss = loss_epoch;
+            points.epoch_min_loss = f32::MAX;
+            points.epoch_max_loss = f32::MIN;
+        }
+
+        if loss.tick < points.epoch_min_loss {
+            points.epoch_min_loss = loss.tick;
+        }
+        if loss.tick > points.epoch_max_loss {
+            points.epoch_max_loss = loss.tick;
+        }
+
         points.loss.push(PlotPoint::new(
-            (loss.iteration * iter_per_epoch) as f64,
+            (loss.iteration + loss_epoch * iter_per_epoch) as f64,
             loss.tick,
+        ));
+    }
+
+    if acc_is_changed {
+        if points.epoch_acc != acc_epoch {
+            points.epoch_acc = acc_epoch;
+            points.epoch_min_acc = f32::MAX;
+            points.epoch_max_acc = f32::MIN;
+        }
+
+        let p = acc.compute_percentage();
+        if p < points.epoch_min_acc {
+            points.epoch_min_acc = p;
+        }
+        if p > points.epoch_max_acc {
+            points.epoch_max_acc = p;
+        }
+
+        points.acc.push(PlotPoint::new(
+            (acc.iteration + acc_epoch * iter_per_epoch) as f64,
+            acc.compute(),
         ));
     }
 
     egui::Window::new("Evaluation").show(egui_context.get_mut(), |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
-            Plot::new("eval").show(ui, |ui| {
-                ui.points(Points::new("points", points.loss.as_slice()).color(Color32::BLUE));
+            Plot::new("eval").allow_scroll(false).show(ui, |ui| {
+                ui.points(Points::new("loss", points.loss.as_slice()).color(Color32::BLUE));
+                ui.points(Points::new("acc", points.acc.as_slice()).color(Color32::RED));
             });
+
+            CollapsingHeader::new("Statistics")
+                .default_open(true)
+                .show(ui, |ui| {
+                    egui::Grid::new("softmax_stats").show(ui, |ui| {
+                        ui.label("Epoch Max Accuracy:");
+                        ui.label(format!("{:.4}", points.epoch_max_acc));
+                        ui.end_row();
+
+                        ui.label("Epoch Min Accuracy:");
+                        ui.label(format!("{:.4}", points.epoch_min_acc));
+                        ui.end_row();
+
+                        ui.label("Epoch Avg Accuracy:");
+                        ui.label(format!("{:.2}%", acc.compute_percentage()));
+                        ui.end_row();
+
+                        ui.label("Epoch Max Loss:");
+                        ui.label(format!("{:.4}", points.epoch_max_loss));
+                        ui.end_row();
+
+                        ui.label("Epoch Min Loss:");
+                        ui.label(format!("{:.4}", points.epoch_min_loss));
+                        ui.end_row();
+
+                        ui.label("Epoch Avg Loss:");
+                        ui.label(format!("{:.4}", loss.compute()));
+                        ui.end_row();
+                    });
+                });
         });
     });
 }
@@ -103,7 +186,7 @@ fn network_egui<N: LetterCnn>(world: &mut World) {
         .single(world)
         .unwrap();
     egui::Window::new(name.as_str()).show(egui_context.get_mut(), |ui| {
-        egui::ScrollArea::vertical().show(ui, |ui| {
+        egui::ScrollArea::both().show(ui, |ui| {
             let mut textures = world.remove_resource::<Textures>().unwrap();
             let mut value = world.query::<&mut Network<N>>().single_mut(world).unwrap();
             value.0.ui(
@@ -148,19 +231,30 @@ impl LayerId {
     }
 }
 
-impl InspectorUi for ImageCnn {
+trait IntoImage {
+    fn into_image(self) -> cnn::image::Image;
+}
+
+impl<const H: usize, const W: usize> IntoImage for Mat3d<1, H, W> {
+    fn into_image(self) -> cnn::image::Image {
+        cnn::image::Image {
+            width: W,
+            height: H,
+            channels: 1,
+            pixels: self.into_inner(),
+        }
+    }
+}
+
+impl<const H: usize, const W: usize> InspectorUi for Cnn<1, H, W> {
     fn ui(&mut self, ui: &mut egui::Ui, textures: &mut Textures, id: LayerId) {
         ui.vertical(|ui| {
             ui.heading("Image Input Layer");
-            let shape = self.input.shape();
-            ui.label(format!(
-                "Image: {}x{}x{}",
-                shape.width, shape.height, shape.channels
-            ));
+            ui.label(format!("Image: {}x{}x{}", 1, H, W));
             display_image(
                 ui,
                 textures,
-                || color_image_direct(&self.input),
+                || color_image_direct(&self.0.clone().into_image()),
                 id,
                 0,
                 emath::Vec2::ONE * 4.0,
@@ -170,39 +264,32 @@ impl InspectorUi for ImageCnn {
     }
 }
 
-impl<Data, const WEIGHTS: usize, const DEPTH: usize, const WIDTH: usize> InspectorUi
-    for FeatureMap<Data, WEIGHTS, DEPTH, WIDTH>
+impl<T, const S: usize, const C: usize, const H: usize, const W: usize, const L: usize> InspectorUi
+    for FeatureMap<T, S, C, H, W, L>
 where
-    Data: InspectorUi,
+    T: InspectorUi,
 {
     fn ui(&mut self, ui: &mut egui::Ui, textures: &mut Textures, id: LayerId) {
         ui.vertical(|ui| {
             CollapsingHeader::new("Inner Layer")
                 .default_open(true)
                 .show(ui, |ui| {
-                    self.data.ui(ui, textures, id.inc());
+                    self.layer.ui(ui, textures, id.inc());
                 });
 
             ui.separator();
             ui.heading("Feature Map Layer");
-            let shape = self.input.shape();
-            ui.label(format!(
-                "{0}x{1}x{2} -> {0}x{1}x{3}",
-                shape.width, shape.height, shape.channels, WIDTH
-            ));
+            ui.label(format!("{0}x{1}x{2} -> {0}x{1}x{3}", C, H, W, L));
 
             CollapsingHeader::new("Filters")
                 .default_open(true)
                 .show(ui, |ui| {
-                    ui.label(format!(
-                        "Filter Weight Matrix: {}x{}x{}",
-                        shape.width, shape.height, shape.channels
-                    ));
+                    ui.label(format!("Filter Weight Matrix: {}x{}x{}", C, S, S));
                     display_images(
                         ui,
                         textures,
                         || create_feature_map_filter_images(self),
-                        WIDTH,
+                        L * C,
                         id,
                         0,
                         emath::Vec2::ONE * 32.0,
@@ -214,32 +301,37 @@ where
 }
 
 fn create_feature_map_filter_images<
-    Data,
-    const WEIGHTS: usize,
-    const DEPTH: usize,
-    const WIDTH: usize,
+    T,
+    const S: usize,
+    const C: usize,
+    const H: usize,
+    const W: usize,
+    const L: usize,
 >(
-    fm: &FeatureMap<Data, WEIGHTS, DEPTH, WIDTH>,
+    fm: &FeatureMap<T, S, C, H, W, L>,
 ) -> Vec<cnn::image::Image> {
-    fm.filters
+    fm.filters()
         .iter()
         .flat_map(|filter| {
-            (0..filter.weights.len()).map(|i| {
-                let min = *filter.weights[i]
-                    .iter()
+            (0..C).map(|i| {
+                let min = *filter
+                    .weights
+                    .iter_channels(i)
                     .min_by(|a, b| a.total_cmp(b))
                     .unwrap();
-                let max = *filter.weights[i]
-                    .iter()
+                let max = *filter
+                    .weights
+                    .iter_channels(i)
                     .max_by(|a, b| a.total_cmp(b))
                     .unwrap();
 
                 cnn::image::Image {
-                    width: filter.size,
-                    height: filter.size,
+                    width: S,
+                    height: S,
                     channels: 1,
-                    pixels: filter.weights[i]
-                        .iter()
+                    pixels: filter
+                        .weights
+                        .iter_channels(i)
                         .map(|p| (p / (max - min + f32::EPSILON)).clamp(0.0, 1.0))
                         .collect(),
                 }
@@ -248,191 +340,145 @@ fn create_feature_map_filter_images<
         .collect()
 }
 
-impl<Data, const LEN: usize> InspectorUi for Relu<Data, [f32; LEN]>
+impl<T, F, const C: usize, const H: usize, const W: usize> InspectorUi for Activation<T, F, C, H, W>
 where
-    Data: InspectorUi,
-{
-    fn ui(&mut self, ui: &mut egui::Ui, textures: &mut Textures, id: LayerId) {
-        relu_inspector_ui(
-            &mut self.data,
-            Shape {
-                width: LEN,
-                height: 1,
-                channels: 1,
-            },
-            &self.input,
-            ui,
-            textures,
-            id,
-        );
-    }
-}
-
-impl<Data> InspectorUi for Relu<Data, cnn::image::Image>
-where
-    Data: InspectorUi,
-{
-    fn ui(&mut self, ui: &mut egui::Ui, textures: &mut Textures, id: LayerId) {
-        relu_inspector_ui(
-            &mut self.data,
-            self.input.shape(),
-            &self.input.pixels,
-            ui,
-            textures,
-            id,
-        );
-    }
-}
-
-fn relu_inspector_ui<Data>(
-    data: &mut Data,
-    shape: Shape,
-    pixels: &[f32],
-    ui: &mut egui::Ui,
-    textures: &mut Textures,
-    id: LayerId,
-) where
-    Data: InspectorUi,
-{
-    ui.vertical(|ui| {
-        CollapsingHeader::new("Inner Layer")
-            .default_open(true)
-            .show(ui, |ui| {
-                data.ui(ui, textures, id.inc());
-            });
-
-        ui.separator();
-        ui.heading("Activation Layer");
-        ui.label(format!(
-            "ReLU {0}x{1}x{2} -> {0}x{1}x{2}",
-            shape.width, shape.height, shape.channels,
-        ));
-
-        CollapsingHeader::new("Input")
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.label("Image Threshold:");
-                thread_local! {
-                    static THRESHOLD: Cell<(f32, f32)> = Cell::new((-1.0, 1.0));
-                }
-                let (mut lower, mut upper) = THRESHOLD.with(|t| t.get());
-                let mut force_update = false;
-                if egui_double_slider::DoubleSlider::new(&mut lower, &mut upper, -1.0..=1.0)
-                    .separation_distance(0.1)
-                    .width(250.0)
-                    .scroll_factor(0.0)
-                    .ui(ui)
-                    .changed()
-                {
-                    THRESHOLD.with(|t| t.set((lower, upper)));
-                    force_update = true;
-                }
-
-                ui.label(format!(
-                    "Input Matrix: {}x{}x{}",
-                    shape.width, shape.height, shape.channels
-                ));
-                let threshold = THRESHOLD.with(|t| t.get());
-                display_images(
-                    ui,
-                    textures,
-                    || create_relu_input_images(shape, pixels, threshold.0, threshold.1),
-                    shape.channels,
-                    id,
-                    0,
-                    emath::Vec2::ONE * 4.0,
-                    force_update,
-                );
-            });
-
-        ui.separator();
-
-        CollapsingHeader::new("Activation Map")
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.label(format!(
-                    "Activation Matrix: {}x{}x{}",
-                    shape.width, shape.height, shape.channels
-                ));
-                display_images(
-                    ui,
-                    textures,
-                    || create_relu_activation_images(shape, pixels),
-                    shape.channels,
-                    id,
-                    shape.channels,
-                    emath::Vec2::ONE * 4.0,
-                    false,
-                );
-            });
-    });
-}
-
-fn create_relu_input_images(
-    shape: Shape,
-    pixels: &[f32],
-    lower: f32,
-    upper: f32,
-) -> Vec<cnn::image::Image> {
-    let range = upper - lower;
-    (0..shape.channels)
-        .map(|i| cnn::image::Image {
-            width: shape.width,
-            height: shape.height,
-            channels: 1,
-            pixels: pixels
-                .iter()
-                .skip(i)
-                .step_by(shape.channels)
-                .map(|p| p.clamp(lower, upper) / range)
-                .collect(),
-        })
-        .collect()
-}
-
-fn create_relu_activation_images(shape: Shape, pixels: &[f32]) -> Vec<cnn::image::Image> {
-    (0..shape.channels)
-        .map(|i| cnn::image::Image {
-            width: shape.width,
-            height: shape.height,
-            channels: 1,
-            pixels: pixels
-                .iter()
-                .skip(i)
-                .step_by(shape.channels)
-                .map(|p| relu_active(*p).then_some(1.0).unwrap_or_default())
-                .collect(),
-        })
-        .collect()
-}
-
-impl<Data> InspectorUi for MaxPool<Data>
-where
-    Data: InspectorUi,
+    T: InspectorUi,
+    F: ActivationFunction,
 {
     fn ui(&mut self, ui: &mut egui::Ui, textures: &mut Textures, id: LayerId) {
         ui.vertical(|ui| {
             CollapsingHeader::new("Inner Layer")
                 .default_open(true)
                 .show(ui, |ui| {
-                    self.data.ui(ui, textures, id.inc());
+                    self.layer.ui(ui, textures, id.inc());
+                });
+
+            ui.separator();
+            ui.heading("Activation Layer");
+            ui.label(format!(
+                "{0} {1}x{2}x{3} -> {1}x{2}x{3}",
+                std::any::type_name::<F>(),
+                C,
+                H,
+                W
+            ));
+
+            CollapsingHeader::new("Input")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.label("Image Threshold:");
+                    thread_local! {
+                        static THRESHOLD: Cell<(f32, f32)> = Cell::new((-1.0, 1.0));
+                    }
+                    let (mut lower, mut upper) = THRESHOLD.with(|t| t.get());
+                    let mut force_update = false;
+                    if egui_double_slider::DoubleSlider::new(&mut lower, &mut upper, -1.0..=1.0)
+                        .separation_distance(0.1)
+                        .width(250.0)
+                        .scroll_factor(0.0)
+                        .ui(ui)
+                        .changed()
+                    {
+                        THRESHOLD.with(|t| t.set((lower, upper)));
+                        force_update = true;
+                    }
+
+                    ui.label(format!("Input Matrix: {}x{}x{}", C, H, W));
+                    let threshold = THRESHOLD.with(|t| t.get());
+                    display_images(
+                        ui,
+                        textures,
+                        || create_act_input_images(self.layer_input(), threshold.0, threshold.1),
+                        C,
+                        id,
+                        0,
+                        emath::Vec2::ONE * 4.0,
+                        force_update,
+                    );
+                });
+
+            ui.separator();
+
+            CollapsingHeader::new("Activation Map")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.label(format!("Activation Matrix: {}x{}x{}", C, H, W));
+                    display_images(
+                        ui,
+                        textures,
+                        || create_activation_images::<F, _, _, _>(self.layer_input()),
+                        C,
+                        id,
+                        C,
+                        emath::Vec2::ONE * 4.0,
+                        false,
+                    );
+                });
+        });
+    }
+}
+
+fn create_act_input_images<const C: usize, const H: usize, const W: usize>(
+    input: &Mat3d<C, H, W>,
+    lower: f32,
+    upper: f32,
+) -> Vec<cnn::image::Image> {
+    let range = upper - lower;
+    (0..C)
+        .map(|i| cnn::image::Image {
+            width: W,
+            height: H,
+            channels: 1,
+            pixels: input
+                .iter_channels(i)
+                .map(|p| p.clamp(lower, upper) / range)
+                .collect(),
+        })
+        .collect()
+}
+
+fn create_activation_images<F, const C: usize, const H: usize, const W: usize>(
+    input: &Mat3d<C, H, W>,
+) -> Vec<cnn::image::Image>
+where
+    F: ActivationFunction,
+{
+    let mask = cnn::activation::activation(input, &mut F::pass_mask);
+    (0..C)
+        .map(|i| cnn::image::Image {
+            width: W,
+            height: H,
+            channels: 1,
+            pixels: mask.iter_channels(i).copied().collect(),
+        })
+        .collect()
+}
+
+impl<T, const SIZE: usize, const C: usize, const H: usize, const W: usize> InspectorUi
+    for MaxPool<T, SIZE, C, H, W>
+where
+    T: InspectorUi,
+    [(); H / SIZE]:,
+    [(); W / SIZE]:,
+{
+    fn ui(&mut self, ui: &mut egui::Ui, textures: &mut Textures, id: LayerId) {
+        ui.vertical(|ui| {
+            CollapsingHeader::new("Inner Layer")
+                .default_open(true)
+                .show(ui, |ui| {
+                    self.layer.ui(ui, textures, id.inc());
                 });
 
             ui.separator();
             ui.heading("Max Pool Layer");
-            let input = self.input.shape();
-            let mut output = self.input.shape();
-            output.width /= self.size;
-            output.height /= self.size;
-
             ui.label(format!(
                 "{}x{}x{} -> {}x{}x{}",
-                input.width,
-                input.height,
-                input.channels,
-                output.width,
-                output.height,
-                output.channels
+                C,
+                H,
+                W,
+                C,
+                H / SIZE,
+                W / SIZE,
             ));
 
             CollapsingHeader::new("Input")
@@ -455,16 +501,13 @@ where
                         force_update = true;
                     }
 
-                    ui.label(format!(
-                        "Input Matrix: {}x{}x{}",
-                        self.input.width, self.input.height, self.input.channels
-                    ));
+                    ui.label(format!("Input Matrix: {}x{}x{}", C, H, W));
                     let threshold = THRESHOLD.with(|t| t.get());
                     display_images(
                         ui,
                         textures,
                         || create_max_pool_input_images(self, threshold.0, threshold.1),
-                        self.input.channels,
+                        C,
                         id,
                         0,
                         emath::Vec2::ONE * 4.0,
@@ -494,20 +537,15 @@ where
                         force_update = true;
                     }
 
-                    ui.label(format!(
-                        "Output Matrix: {}x{}x{}",
-                        self.input.width / self.size,
-                        self.input.height / self.size,
-                        self.input.channels
-                    ));
+                    ui.label(format!("Output Matrix: {}x{}x{}", C, H / SIZE, W / SIZE,));
                     let threshold = THRESHOLD.with(|t| t.get());
                     display_images(
                         ui,
                         textures,
                         || create_max_pool_output_images(self, threshold.0, threshold.1),
-                        self.input.channels,
+                        C,
                         id,
-                        self.input.channels,
+                        C,
                         emath::Vec2::ONE * 8.0,
                         force_update,
                     );
@@ -515,315 +553,319 @@ where
 
             ui.separator();
 
-            ui.collapsing("Statistics", |ui| {
-                let output_image = cnn::pool::max_pool(&self.input, self.size);
-
-                ui.label("Dimensional Statistics:");
-                egui::Grid::new("dimension_stats").show(ui, |ui| {
-                    ui.label("Pool size:");
-                    ui.label(format!("{}×{}", self.size, self.size));
-                    ui.end_row();
-
-                    ui.label("Input pixels:");
-                    ui.label(format!("{}", self.input.width * self.input.height));
-                    ui.end_row();
-
-                    ui.label("Output pixels:");
-                    ui.label(format!("{}", output_image.width * output_image.height));
-                    ui.end_row();
-
-                    let reduction_factor = (self.input.width * self.input.height) as f32
-                        / (output_image.width * output_image.height) as f32;
-                    ui.label("Reduction factor:");
-                    ui.label(format!("{:.2}× fewer pixels", reduction_factor));
-                    ui.end_row();
-
-                    let compression_ratio = (1.0 - 1.0 / reduction_factor) * 100.0;
-                    ui.label("Compression ratio:");
-                    ui.label(format!("{:.1}% reduction", compression_ratio));
-                    ui.end_row();
-                });
-
-                #[derive(Debug)]
-                struct ImageStats {
-                    mean: f32,
-                    std_dev: f32,
-                    min: f32,
-                    max: f32,
-                }
-
-                #[derive(Debug)]
-                struct PoolingStats {
-                    sparsity: f32,
-                    zero_count: usize,
-                    concentration: f32,
-                    edge_preservation: f32,
-                }
-
-                fn calculate_image_stats(image: &cnn::image::Image) -> ImageStats {
-                    let pixels = &image.pixels;
-                    let len = pixels.len() as f32;
-
-                    let mean = pixels.iter().sum::<f32>() / len;
-                    let variance = pixels.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / len;
-                    let std_dev = variance.sqrt();
-                    let min = pixels.iter().fold(f32::INFINITY, |a, &b| a.min(b));
-                    let max = pixels.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
-
-                    ImageStats {
-                        mean,
-                        std_dev,
-                        min,
-                        max,
-                    }
-                }
-
-                fn calculate_pooling_stats(
-                    input: &cnn::image::Image,
-                    output: &cnn::image::Image,
-                    pool_size: usize,
-                ) -> PoolingStats {
-                    let zero_count = output.pixels.iter().filter(|&&x| x.abs() < 1e-6).count();
-                    let sparsity = zero_count as f32 / output.pixels.len() as f32;
-
-                    // Calculate concentration (how much values cluster around the mean)
-                    let mean = output.pixels.iter().sum::<f32>() / output.pixels.len() as f32;
-                    let concentration = {
-                        let deviations: Vec<f32> =
-                            output.pixels.iter().map(|&x| (x - mean).abs()).collect();
-                        let mean_deviation =
-                            deviations.iter().sum::<f32>() / deviations.len() as f32;
-                        if mean_deviation == 0.0 {
-                            1.0
-                        } else {
-                            1.0 / (1.0 + mean_deviation)
-                        }
-                    };
-
-                    // Simple edge preservation estimate (compare gradients)
-                    let edge_preservation = estimate_edge_preservation(input, output, pool_size);
-
-                    PoolingStats {
-                        sparsity,
-                        zero_count,
-                        concentration,
-                        edge_preservation,
-                    }
-                }
-
-                fn estimate_edge_preservation(
-                    input: &cnn::image::Image,
-                    output: &cnn::image::Image,
-                    pool_size: usize,
-                ) -> f32 {
-                    // Simple gradient magnitude comparison
-                    let input_gradient_sum = calculate_gradient_magnitude(input);
-                    let output_gradient_sum = calculate_gradient_magnitude(output);
-
-                    // Scale by the expected reduction due to pooling
-                    let expected_scale = 1.0 / (pool_size as f32).powi(2);
-                    let scaled_output_gradient = output_gradient_sum / expected_scale;
-
-                    if input_gradient_sum == 0.0 {
-                        1.0
-                    } else {
-                        (scaled_output_gradient / input_gradient_sum).min(1.0)
-                    }
-                }
-
-                fn calculate_gradient_magnitude(image: &cnn::image::Image) -> f32 {
-                    let mut total_gradient = 0.0;
-
-                    for y in 0..image.height.saturating_sub(1) {
-                        for x in 0..image.width.saturating_sub(1) {
-                            for c in 0..image.channels {
-                                let idx = (y * image.width + x) * image.channels + c;
-                                let idx_right = (y * image.width + x + 1) * image.channels + c;
-                                let idx_down = ((y + 1) * image.width + x) * image.channels + c;
-
-                                let dx = image.pixels[idx_right] - image.pixels[idx];
-                                let dy = image.pixels[idx_down] - image.pixels[idx];
-                                let gradient_mag = (dx * dx + dy * dy).sqrt();
-                                total_gradient += gradient_mag;
-                            }
-                        }
-                    }
-
-                    total_gradient
-                }
-
-                ui.separator();
-
-                ui.label("Comparisons:");
-                let input_stats = calculate_image_stats(&self.input);
-                let output_stats = calculate_image_stats(&output_image);
-
-                egui::Grid::new("comparison_stats").show(ui, |ui| {
-                    ui.label("");
-                    ui.label("Input");
-                    ui.label("Output");
-                    ui.label("Change");
-                    ui.end_row();
-
-                    ui.label("Mean:");
-                    ui.label(format!("{:.4}", input_stats.mean));
-                    ui.label(format!("{:.4}", output_stats.mean));
-                    let mean_change =
-                        ((output_stats.mean - input_stats.mean) / input_stats.mean) * 100.0;
-                    ui.label(format!("{:+.1}%", mean_change));
-                    ui.end_row();
-
-                    ui.label("Std Dev:");
-                    ui.label(format!("{:.4}", input_stats.std_dev));
-                    ui.label(format!("{:.4}", output_stats.std_dev));
-                    let std_change = ((output_stats.std_dev - input_stats.std_dev)
-                        / input_stats.std_dev)
-                        * 100.0;
-                    ui.label(format!("{:+.1}%", std_change));
-                    ui.end_row();
-
-                    ui.label("Min:");
-                    ui.label(format!("{:.4}", input_stats.min));
-                    ui.label(format!("{:.4}", output_stats.min));
-                    ui.label(format!("{:+.4}", output_stats.min - input_stats.min));
-                    ui.end_row();
-
-                    ui.label("Max:");
-                    ui.label(format!("{:.4}", input_stats.max));
-                    ui.label(format!("{:.4}", output_stats.max));
-                    ui.label(format!("{:+.4}", output_stats.max - input_stats.max));
-                    ui.end_row();
-
-                    ui.label("Range:");
-                    let input_range = input_stats.max - input_stats.min;
-                    let output_range = output_stats.max - output_stats.min;
-                    ui.label(format!("{:.4}", input_range));
-                    ui.label(format!("{:.4}", output_range));
-                    ui.label(format!("{:+.4}", output_range - input_range));
-                    ui.end_row();
-                });
-
-                ui.separator();
-
-                ui.label("Pooling Analysis:");
-
-                let pooling_stats = calculate_pooling_stats(&self.input, &output_image, self.size);
-
-                egui::Grid::new("pooling_stats").show(ui, |ui| {
-                    ui.label("Output sparsity:");
-                    ui.label(format!(
-                        "{:.2}% ({} zeros)",
-                        pooling_stats.sparsity * 100.0,
-                        pooling_stats.zero_count
-                    ));
-                    ui.end_row();
-
-                    ui.label("Value concentration:");
-                    ui.label(format!("{:.3}", pooling_stats.concentration));
-                    ui.end_row();
-
-                    ui.label("Edge preservation:");
-                    ui.label(format!("{:.2}%", pooling_stats.edge_preservation * 100.0));
-                    ui.end_row();
-                });
-            });
+            // ui.collapsing("Statistics", |ui| {
+            //     let output_image = self.max_pool();
+            //
+            //     ui.label("Dimensional Statistics:");
+            //     egui::Grid::new("dimension_stats").show(ui, |ui| {
+            //         ui.label("Pool size:");
+            //         ui.label(format!("{}×{}", SIZE, SIZE));
+            //         ui.end_row();
+            //
+            //         ui.label("Input pixels:");
+            //         ui.label(format!("{}", H * W));
+            //         ui.end_row();
+            //
+            //         ui.label("Output pixels:");
+            //         ui.label(format!("{}", (H / SIZE) * (W / SIZE)));
+            //         ui.end_row();
+            //
+            //         let reduction_factor = (H * W) as f32 / ((H / SIZE) * (W / SIZE)) as f32;
+            //         ui.label("Reduction factor:");
+            //         ui.label(format!("{:.2}× fewer pixels", reduction_factor));
+            //         ui.end_row();
+            //
+            //         let compression_ratio = (1.0 - 1.0 / reduction_factor) * 100.0;
+            //         ui.label("Compression ratio:");
+            //         ui.label(format!("{:.1}% reduction", compression_ratio));
+            //         ui.end_row();
+            //     });
+            //
+            //     #[derive(Debug)]
+            //     struct ImageStats {
+            //         mean: f32,
+            //         std_dev: f32,
+            //         min: f32,
+            //         max: f32,
+            //     }
+            //
+            //     #[derive(Debug)]
+            //     struct PoolingStats {
+            //         sparsity: f32,
+            //         zero_count: usize,
+            //         concentration: f32,
+            //         edge_preservation: f32,
+            //     }
+            //
+            //     fn calculate_image_stats(image: &cnn::image::Image) -> ImageStats {
+            //         let pixels = &image.pixels;
+            //         let len = pixels.len() as f32;
+            //
+            //         let mean = pixels.iter().sum::<f32>() / len;
+            //         let variance = pixels.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / len;
+            //         let std_dev = variance.sqrt();
+            //         let min = pixels.iter().fold(f32::INFINITY, |a, &b| a.min(b));
+            //         let max = pixels.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+            //
+            //         ImageStats {
+            //             mean,
+            //             std_dev,
+            //             min,
+            //             max,
+            //         }
+            //     }
+            //
+            //     fn calculate_pooling_stats(
+            //         input: &cnn::image::Image,
+            //         output: &cnn::image::Image,
+            //         pool_size: usize,
+            //     ) -> PoolingStats {
+            //         let zero_count = output.pixels.iter().filter(|&&x| x.abs() < 1e-6).count();
+            //         let sparsity = zero_count as f32 / output.pixels.len() as f32;
+            //
+            //         // Calculate concentration (how much values cluster around the mean)
+            //         let mean = output.pixels.iter().sum::<f32>() / output.pixels.len() as f32;
+            //         let concentration = {
+            //             let deviations: Vec<f32> =
+            //                 output.pixels.iter().map(|&x| (x - mean).abs()).collect();
+            //             let mean_deviation =
+            //                 deviations.iter().sum::<f32>() / deviations.len() as f32;
+            //             if mean_deviation == 0.0 {
+            //                 1.0
+            //             } else {
+            //                 1.0 / (1.0 + mean_deviation)
+            //             }
+            //         };
+            //
+            //         // Simple edge preservation estimate (compare gradients)
+            //         let edge_preservation = estimate_edge_preservation(input, output, pool_size);
+            //
+            //         PoolingStats {
+            //             sparsity,
+            //             zero_count,
+            //             concentration,
+            //             edge_preservation,
+            //         }
+            //     }
+            //
+            //     fn estimate_edge_preservation(
+            //         input: &cnn::image::Image,
+            //         output: &cnn::image::Image,
+            //         pool_size: usize,
+            //     ) -> f32 {
+            //         // Simple gradient magnitude comparison
+            //         let input_gradient_sum = calculate_gradient_magnitude(input);
+            //         let output_gradient_sum = calculate_gradient_magnitude(output);
+            //
+            //         // Scale by the expected reduction due to pooling
+            //         let expected_scale = 1.0 / (pool_size as f32).powi(2);
+            //         let scaled_output_gradient = output_gradient_sum / expected_scale;
+            //
+            //         if input_gradient_sum == 0.0 {
+            //             1.0
+            //         } else {
+            //             (scaled_output_gradient / input_gradient_sum).min(1.0)
+            //         }
+            //     }
+            //
+            //     fn calculate_gradient_magnitude(image: &cnn::image::Image) -> f32 {
+            //         let mut total_gradient = 0.0;
+            //
+            //         for y in 0..image.height.saturating_sub(1) {
+            //             for x in 0..image.width.saturating_sub(1) {
+            //                 for c in 0..image.channels {
+            //                     let idx = (y * image.width + x) * image.channels + c;
+            //                     let idx_right = (y * image.width + x + 1) * image.channels + c;
+            //                     let idx_down = ((y + 1) * image.width + x) * image.channels + c;
+            //
+            //                     let dx = image.pixels[idx_right] - image.pixels[idx];
+            //                     let dy = image.pixels[idx_down] - image.pixels[idx];
+            //                     let gradient_mag = (dx * dx + dy * dy).sqrt();
+            //                     total_gradient += gradient_mag;
+            //                 }
+            //             }
+            //         }
+            //
+            //         total_gradient
+            //     }
+            //
+            //     ui.separator();
+            //
+            //     ui.label("Comparisons:");
+            //     // let input_stats = calculate_image_stats(&self.input);
+            //     // let output_stats = calculate_image_stats(&output_image);
+            //
+            //     egui::Grid::new("comparison_stats").show(ui, |ui| {
+            //         ui.label("");
+            //         ui.label("Input");
+            //         ui.label("Output");
+            //         ui.label("Change");
+            //         ui.end_row();
+            //
+            //         ui.label("Mean:");
+            //         ui.label(format!("{:.4}", input_stats.mean));
+            //         ui.label(format!("{:.4}", output_stats.mean));
+            //         let mean_change =
+            //             ((output_stats.mean - input_stats.mean) / input_stats.mean) * 100.0;
+            //         ui.label(format!("{:+.1}%", mean_change));
+            //         ui.end_row();
+            //
+            //         ui.label("Std Dev:");
+            //         ui.label(format!("{:.4}", input_stats.std_dev));
+            //         ui.label(format!("{:.4}", output_stats.std_dev));
+            //         let std_change = ((output_stats.std_dev - input_stats.std_dev)
+            //             / input_stats.std_dev)
+            //             * 100.0;
+            //         ui.label(format!("{:+.1}%", std_change));
+            //         ui.end_row();
+            //
+            //         ui.label("Min:");
+            //         ui.label(format!("{:.4}", input_stats.min));
+            //         ui.label(format!("{:.4}", output_stats.min));
+            //         ui.label(format!("{:+.4}", output_stats.min - input_stats.min));
+            //         ui.end_row();
+            //
+            //         ui.label("Max:");
+            //         ui.label(format!("{:.4}", input_stats.max));
+            //         ui.label(format!("{:.4}", output_stats.max));
+            //         ui.label(format!("{:+.4}", output_stats.max - input_stats.max));
+            //         ui.end_row();
+            //
+            //         ui.label("Range:");
+            //         let input_range = input_stats.max - input_stats.min;
+            //         let output_range = output_stats.max - output_stats.min;
+            //         ui.label(format!("{:.4}", input_range));
+            //         ui.label(format!("{:.4}", output_range));
+            //         ui.label(format!("{:+.4}", output_range - input_range));
+            //         ui.end_row();
+            //     });
+            //
+            //     ui.separator();
+            //
+            //     ui.label("Pooling Analysis:");
+            //
+            //     let pooling_stats = calculate_pooling_stats(&self.input, &output_image, self.size);
+            //
+            //     egui::Grid::new("pooling_stats").show(ui, |ui| {
+            //         ui.label("Output sparsity:");
+            //         ui.label(format!(
+            //             "{:.2}% ({} zeros)",
+            //             pooling_stats.sparsity * 100.0,
+            //             pooling_stats.zero_count
+            //         ));
+            //         ui.end_row();
+            //
+            //         ui.label("Value concentration:");
+            //         ui.label(format!("{:.3}", pooling_stats.concentration));
+            //         ui.end_row();
+            //
+            //         ui.label("Edge preservation:");
+            //         ui.label(format!("{:.2}%", pooling_stats.edge_preservation * 100.0));
+            //         ui.end_row();
+            //     });
+            // });
         });
     }
 }
 
-fn create_max_pool_input_images<Data>(
-    max_pool: &MaxPool<Data>,
+fn create_max_pool_input_images<
+    T,
+    const SIZE: usize,
+    const C: usize,
+    const H: usize,
+    const W: usize,
+>(
+    max_pool: &MaxPool<T, SIZE, C, H, W>,
     lower: f32,
     upper: f32,
 ) -> Vec<cnn::image::Image> {
     let range = upper - lower;
-    (0..max_pool.input.channels)
+    (0..C)
         .map(|i| cnn::image::Image {
-            width: max_pool.input.width,
-            height: max_pool.input.height,
+            width: W,
+            height: H,
             channels: 1,
             pixels: max_pool
-                .input
-                .pixels
-                .iter()
-                .skip(i)
-                .step_by(max_pool.input.channels)
+                .layer_input()
+                .iter_channels(i)
                 .map(|p| p.clamp(lower, upper) / range)
                 .collect(),
         })
         .collect()
 }
 
-fn create_max_pool_output_images<Data>(
-    max_pool: &MaxPool<Data>,
+fn create_max_pool_output_images<
+    T,
+    const SIZE: usize,
+    const C: usize,
+    const H: usize,
+    const W: usize,
+>(
+    max_pool: &MaxPool<T, SIZE, C, H, W>,
     lower: f32,
     upper: f32,
-) -> Vec<cnn::image::Image> {
-    let image = cnn::pool::max_pool(&max_pool.input, max_pool.size);
+) -> Vec<cnn::image::Image>
+where
+    [(); H / SIZE]:,
+    [(); W / SIZE]:,
+{
+    let output = max_pool.max_pool();
 
     let range = upper - lower;
-    (0..max_pool.input.channels)
+    (0..C)
         .map(|i| cnn::image::Image {
-            width: max_pool.input.width / max_pool.size,
-            height: max_pool.input.height / max_pool.size,
+            width: W / SIZE,
+            height: H / SIZE,
             channels: 1,
-            pixels: image
-                .pixels
-                .iter()
-                .skip(i)
-                .step_by(max_pool.input.channels)
+            pixels: output
+                .iter_channels(i)
                 .map(|p| p.clamp(lower, upper) / range)
                 .collect(),
         })
         .collect()
 }
 
-impl<Data, const LEN: usize> InspectorUi for Flatten<Data, LEN>
+impl<T, const C: usize, const H: usize, const W: usize> InspectorUi for Flatten<T, C, H, W>
 where
-    Data: InspectorUi,
+    T: InspectorUi,
 {
     fn ui(&mut self, ui: &mut egui::Ui, textures: &mut Textures, id: LayerId) {
         ui.vertical(|ui| {
             CollapsingHeader::new("Inner Layer")
                 .default_open(true)
                 .show(ui, |ui| {
-                    self.data.ui(ui, textures, id.inc());
+                    self.layer.ui(ui, textures, id.inc());
                 });
 
             ui.separator();
             ui.heading("Flatten Layer");
-            let shape = self.input.shape();
-            ui.label(format!(
-                "{}x{}x{} -> {}x{}",
-                shape.width, shape.height, shape.channels, LEN, 1
-            ));
+            ui.label(format!("{}x{}x{} -> {}x{}", C, H, W, 1, C * H * W,));
         });
     }
 }
 
-impl<Data, const INPUT: usize, const OUTPUT: usize> InspectorUi
-    for FullyConnected<Data, INPUT, OUTPUT>
+impl<T, const H: usize, const W: usize> InspectorUi for FullyConnected<T, H, W>
 where
-    Data: InspectorUi,
+    T: InspectorUi,
 {
     fn ui(&mut self, ui: &mut egui::Ui, textures: &mut Textures, id: LayerId) {
         ui.vertical(|ui| {
             CollapsingHeader::new("Inner Layer")
                 .default_open(true)
                 .show(ui, |ui| {
-                    self.data.ui(ui, textures, id.inc());
+                    self.layer.ui(ui, textures, id.inc());
                 });
 
             ui.separator();
             ui.heading("Fully Connected Layer");
-            ui.label(format!("{}x{} -> {}x{}", INPUT, 1, OUTPUT, 1));
+            ui.label(format!("{}x{} -> {}x{}", 1, H, 1, W));
 
             ui.separator();
 
             CollapsingHeader::new("Weights")
                 .default_open(true)
                 .show(ui, |ui| {
-                    ui.label(format!("Weight Matrix: {}x{}", INPUT, OUTPUT));
+                    ui.label(format!("Weight Matrix: {}x{}", H, W));
                     display_image(
                         ui,
                         textures,
@@ -835,13 +877,7 @@ where
                     );
 
                     ui.add_space(10.0);
-                    let weights_flat: Vec<f32> = self
-                        .fc
-                        .weights
-                        .iter()
-                        .flat_map(|row| row.iter())
-                        .copied()
-                        .collect();
+                    let weights_flat: Vec<f32> = self.fc.weights.iter().copied().collect();
                     display_weight_stats(ui, &weights_flat, "Weight");
                 });
 
@@ -850,7 +886,7 @@ where
             CollapsingHeader::new("Bias")
                 .default_open(true)
                 .show(ui, |ui| {
-                    ui.label(format!("Bias Vector: {}", OUTPUT));
+                    ui.label(format!("Bias Vector: {}", W));
                     display_image(
                         ui,
                         textures,
@@ -868,15 +904,9 @@ where
             ui.separator();
 
             ui.collapsing("Layer Statistics", |ui| {
-                let weights_flat: Vec<f32> = self
-                    .fc
-                    .weights
-                    .iter()
-                    .flat_map(|row| row.iter())
-                    .copied()
-                    .collect();
+                let weights_flat: Vec<f32> = self.fc.weights.iter().copied().collect();
 
-                let total_params = weights_flat.len() + self.fc.bias.len();
+                let total_params = weights_flat.len() + W;
                 let weight_magnitude = weights_flat.iter().map(|&w| w * w).sum::<f32>().sqrt();
                 let bias_magnitude = self.fc.bias.iter().map(|&b| b * b).sum::<f32>().sqrt();
 
@@ -890,7 +920,7 @@ where
                     ui.end_row();
 
                     ui.label("Bias parameters:");
-                    ui.label(format!("{}", self.fc.bias.len()));
+                    ui.label(format!("{}", W));
                     ui.end_row();
 
                     ui.label("Weight L2 norm:");
@@ -899,14 +929,6 @@ where
 
                     ui.label("Bias L2 norm:");
                     ui.label(format!("{:.6}", bias_magnitude));
-                    ui.end_row();
-
-                    ui.label("Input size:");
-                    ui.label(format!("{}", INPUT));
-                    ui.end_row();
-
-                    ui.label("Output size:");
-                    ui.label(format!("{}", OUTPUT));
                     ui.end_row();
                 });
             });
@@ -952,50 +974,36 @@ fn display_weight_stats(ui: &mut egui::Ui, values: &[f32], label: &str) {
     });
 }
 
-fn create_weight_image<Data, const INPUT: usize, const OUTPUT: usize>(
-    fc: &FullyConnected<Data, INPUT, OUTPUT>,
+fn create_weight_image<T, const H: usize, const W: usize>(
+    fc: &FullyConnected<T, H, W>,
 ) -> ColorImage {
-    let min = *fc
-        .fc
-        .weights
-        .iter()
-        .flat_map(|row| row.iter())
-        .min_by(|a, b| a.total_cmp(b))
-        .unwrap();
-    let max = *fc
-        .fc
-        .weights
-        .iter()
-        .flat_map(|row| row.iter())
-        .max_by(|a, b| a.total_cmp(b))
-        .unwrap();
+    let min = *fc.fc.weights.iter().min_by(|a, b| a.total_cmp(b)).unwrap();
+    let max = *fc.fc.weights.iter().max_by(|a, b| a.total_cmp(b)).unwrap();
 
     ColorImage::new(
-        [INPUT, OUTPUT],
+        [H, W],
         fc.fc
             .weights
             .iter()
-            .flat_map(|row| {
-                row.iter().map(|&weight| {
-                    let v = ((weight / (max - min + f32::EPSILON)).clamp(0.0, 1.0) * u8::MAX as f32)
-                        as u8;
-                    Color32::from_rgb(v, v, v)
-                    // let rgb = weight_to_rgb(weight, min, max);
-                    // Color32::from_rgb(rgb[0], rgb[1], rgb[2])
-                })
+            .map(|&weight| {
+                let v =
+                    ((weight / (max - min + f32::EPSILON)).clamp(0.0, 1.0) * u8::MAX as f32) as u8;
+                Color32::from_rgb(v, v, v)
+                // let rgb = weight_to_rgb(weight, min, max);
+                // Color32::from_rgb(rgb[0], rgb[1], rgb[2])
             })
             .collect(),
     )
 }
 
-fn create_bias_image<Data, const INPUT: usize, const OUTPUT: usize>(
-    fc: &FullyConnected<Data, INPUT, OUTPUT>,
+fn create_bias_image<T, const H: usize, const W: usize>(
+    fc: &FullyConnected<T, H, W>,
 ) -> ColorImage {
     let min = *fc.fc.bias.iter().min_by(|a, b| a.total_cmp(b)).unwrap();
     let max = *fc.fc.bias.iter().max_by(|a, b| a.total_cmp(b)).unwrap();
 
     ColorImage::new(
-        [OUTPUT, 1],
+        [W, 1],
         fc.fc
             .bias
             .iter()
@@ -1008,30 +1016,30 @@ fn create_bias_image<Data, const INPUT: usize, const OUTPUT: usize>(
     )
 }
 
-impl<Data, const OUTPUT: usize> InspectorUi for Softmax<Data, OUTPUT>
+impl<T, const W: usize> InspectorUi for Softmax<T, W>
 where
-    Data: InspectorUi,
+    T: InspectorUi,
 {
     fn ui(&mut self, ui: &mut egui::Ui, textures: &mut Textures, id: LayerId) {
         ui.vertical(|ui| {
             CollapsingHeader::new("Inner Layer")
                 .default_open(true)
                 .show(ui, |ui| {
-                    self.data.ui(ui, textures, id.inc());
+                    self.layer.ui(ui, textures, id.inc());
                 });
 
             ui.separator();
             ui.heading("Softmax Layer");
-            ui.label(format!("{}x{} -> {}x{}", 1, OUTPUT, 1, OUTPUT));
+            ui.label(format!("{}x{} -> {}x{}", 1, W, 1, W));
 
             ui.separator();
             CollapsingHeader::new("Input")
                 .default_open(true)
                 .show(ui, |ui| {
-                    draw_bar_chart(ui, &self.input, Color32::LIGHT_BLUE, true);
+                    draw_bar_chart(ui, self.layer_input(), Color32::LIGHT_BLUE, true);
                 });
 
-            let output = cnn::linear::softmax(self.input);
+            let output = self.softmax();
             CollapsingHeader::new("Output")
                 .default_open(true)
                 .show(ui, |ui| {
@@ -1040,9 +1048,15 @@ where
 
             ui.separator();
             ui.collapsing("Statistics", |ui| {
-                let input_sum: f32 = self.input.iter().sum();
-                let input_max = self.input.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
-                let input_min = self.input.iter().fold(f32::INFINITY, |a, &b| a.min(b));
+                let input_sum: f32 = self.layer_input().iter().sum();
+                let input_max = self
+                    .layer_input()
+                    .iter()
+                    .fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+                let input_min = self
+                    .layer_input()
+                    .iter()
+                    .fold(f32::INFINITY, |a, &b| a.min(b));
 
                 let output_sum: f32 = output.iter().sum();
                 let entropy = -output
@@ -1082,13 +1096,18 @@ where
     }
 }
 
-fn draw_bar_chart(ui: &mut egui::Ui, values: &[f32], color: Color32, allow_negative: bool) {
+fn draw_bar_chart<const W: usize>(
+    ui: &mut egui::Ui,
+    input: &Mat1d<W>,
+    color: Color32,
+    allow_negative: bool,
+) {
     ui.add_space(30.0);
 
     let height = 100.0;
     let bar_width = 30.0;
     let spacing = 5.0;
-    let total_width = values.len() as f32 * (bar_width + spacing) - spacing;
+    let total_width = W as f32 * (bar_width + spacing) - spacing;
 
     let (rect, _) =
         ui.allocate_exact_size(emath::Vec2::new(total_width, height), egui::Sense::hover());
@@ -1097,15 +1116,15 @@ fn draw_bar_chart(ui: &mut egui::Ui, values: &[f32], color: Color32, allow_negat
         let painter = ui.painter();
 
         let min_val = if allow_negative {
-            values.iter().fold(0.0f32, |acc, &x| acc.min(x))
+            input.iter().fold(0.0f32, |acc, &x| acc.min(x))
         } else {
             0.0
         };
-        let max_val = values.iter().fold(0.0f32, |acc, &x| acc.max(x));
+        let max_val = input.iter().fold(0.0f32, |acc, &x| acc.max(x));
         let range = max_val - min_val;
 
         if range > 0.0 {
-            for (i, &value) in values.iter().enumerate() {
+            for (i, &value) in input.iter().enumerate() {
                 let x = rect.min.x + i as f32 * (bar_width + spacing);
                 let normalized = (value - min_val) / range;
                 let bar_height = normalized * height;

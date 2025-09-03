@@ -2,29 +2,33 @@ use crate::Layer;
 use crate::matrix::{Mat1d, Mat3d};
 
 #[derive(Debug, Clone)]
-pub struct Softmax<T, const OUT: usize> {
+pub struct Softmax<T, const W: usize> {
     pub layer: T,
-    input: Mat1d<OUT>,
+    input: Mat1d<W>,
 }
 
-impl<T, const OUT: usize> Softmax<T, OUT> {
-    pub fn softmax(&self) -> Mat1d<OUT> {
+impl<T, const W: usize> Softmax<T, W> {
+    pub fn softmax(&self) -> Mat1d<W> {
         softmax(&self.input)
+    }
+
+    pub fn layer_input(&self) -> &Mat1d<W> {
+        &self.input
     }
 }
 
-pub trait SoftmaxLayer<const OUT: usize>
+pub trait SoftmaxLayer<const W: usize>
 where
     Self: Sized,
 {
-    fn softmax_layer(self) -> Softmax<Self, OUT>;
+    fn softmax_layer(self) -> Softmax<Self, W>;
 }
 
-impl<T, const OUT: usize> SoftmaxLayer<OUT> for T
+impl<T, const W: usize> SoftmaxLayer<W> for T
 where
-    T: Layer<Item = Mat1d<OUT>>,
+    T: Layer<Item = Mat1d<W>>,
 {
-    fn softmax_layer(self) -> Softmax<Self, OUT> {
+    fn softmax_layer(self) -> Softmax<Self, W> {
         Softmax {
             layer: self,
             input: Mat3d::zero(),
@@ -32,12 +36,12 @@ where
     }
 }
 
-impl<T, const OUT: usize> Layer for Softmax<T, OUT>
+impl<T, const W: usize> Layer for Softmax<T, W>
 where
-    T: Layer<Item = Mat1d<OUT>>,
+    T: Layer<Item = Mat1d<W>>,
 {
     type Input = T::Input;
-    type Item = Mat1d<OUT>;
+    type Item = Mat1d<W>;
 
     fn input(&mut self, input: Self::Input) {
         self.layer.input(input);
@@ -53,7 +57,7 @@ where
     }
 }
 
-pub fn softmax<const OUT: usize>(input: &Mat1d<OUT>) -> Mat1d<OUT> {
+pub fn softmax<const W: usize>(input: &Mat1d<W>) -> Mat1d<W> {
     let biggest = *input.iter().max_by(|a, b| a.total_cmp(b)).unwrap();
     let mut exp = input.clone();
     exp.iter_mut().for_each(|v| *v = (*v - biggest).exp());

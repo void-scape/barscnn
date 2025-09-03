@@ -1,9 +1,10 @@
 use crate::matrix::Mat3d;
+use crate::rand::XorShiftRng;
 
 #[derive(Debug, Clone)]
 pub struct Filter<const SIZE: usize, const C: usize> {
-    weights: Mat3d<C, SIZE, SIZE>,
-    bias: f32,
+    pub weights: Mat3d<C, SIZE, SIZE>,
+    pub bias: f32,
 }
 
 impl<const SIZE: usize, const C: usize> Filter<SIZE, C> {
@@ -17,6 +18,21 @@ impl<const SIZE: usize, const C: usize> Filter<SIZE, C> {
             bias: 0.0,
         }
     }
+}
+
+pub fn feature_set<const LEN: usize, const SIZE: usize, const C: usize>(
+    f: impl FnMut(usize) -> Filter<SIZE, C>,
+) -> [Filter<SIZE, C>; LEN] {
+    std::array::from_fn(f)
+}
+
+pub fn xavier<const SIZE: usize, const C: usize>(seed: u64) -> Filter<SIZE, C> {
+    let mut rng = XorShiftRng::new(seed);
+    let fan_in = SIZE * SIZE * C;
+    let fan_out = SIZE * SIZE;
+    let scale = (2.0 / (fan_in + fan_out) as f32).sqrt();
+    let weights = Mat3d::new((0..C * SIZE * SIZE).map(|_| rng.uniform() * scale));
+    Filter { weights, bias: 0.0 }
 }
 
 pub fn identity<const C: usize>() -> Filter<3, C> {

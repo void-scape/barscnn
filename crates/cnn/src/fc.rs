@@ -1,10 +1,11 @@
 use crate::Layer;
 use crate::matrix::{Mat1d, Mat2d, Mat3d};
+use crate::rand::XorShiftRng;
 
 #[derive(Debug, Clone)]
 pub struct FullyConnected<T, const H: usize, const W: usize> {
     pub layer: T,
-    fc: FcWeights<H, W>,
+    pub fc: FcWeights<H, W>,
     input: Mat1d<H>,
 }
 
@@ -64,7 +65,7 @@ where
         for h in 0..H {
             for w in 0..W {
                 let g = self.input[h] * output_gradient[w];
-                *self.fc.weights.chw_mut(0, h, w) -= learning_rate * g;
+                *self.fc.weights.chw_mut(0, w, h) -= learning_rate * g;
             }
         }
 
@@ -79,7 +80,7 @@ where
         for h in 0..H {
             let mut grad = 0.0;
             for w in 0..W {
-                grad += self.fc.weights.chw(0, h, w) * output_gradient[w];
+                grad += self.fc.weights.chw(0, w, h) * output_gradient[w];
             }
             input_gradient[h] = grad;
         }
@@ -95,7 +96,7 @@ pub fn fully_connected<const H: usize, const W: usize>(
     for w in 0..W {
         let mut result = 0.0;
         for h in 0..H {
-            result += fc.weights.chw(0, h, w) * input[h];
+            result += fc.weights.chw(0, w, h) * input[h];
         }
         result += fc.bias[w];
         output[w] = result;
@@ -105,45 +106,18 @@ pub fn fully_connected<const H: usize, const W: usize>(
 
 #[derive(Debug, Clone)]
 pub struct FcWeights<const H: usize, const W: usize> {
-    weights: Mat2d<H, W>,
-    bias: Mat1d<W>,
+    pub weights: Mat2d<W, H>,
+    pub bias: Mat1d<W>,
 }
 
 impl<const H: usize, const W: usize> FcWeights<H, W> {
-    pub fn glorot() -> Self {
-        glorot_initialization()
+    pub fn glorot(seed: u64) -> Self {
+        glorot_initialization(seed)
     }
 }
 
-fn glorot_initialization<const H: usize, const W: usize>() -> FcWeights<H, W> {
-    struct XorShiftRng {
-        state: u64,
-    }
-
-    impl XorShiftRng {
-        fn new(seed: u64) -> Self {
-            Self {
-                state: if seed == 0 { 1 } else { seed },
-            }
-        }
-
-        fn next(&mut self) -> u64 {
-            self.state ^= self.state << 13;
-            self.state ^= self.state >> 7;
-            self.state ^= self.state << 17;
-            self.state
-        }
-    }
-
-    fn time_seed() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as u64
-    }
-
-    let mut rng = XorShiftRng::new(time_seed());
-
+fn glorot_initialization<const H: usize, const W: usize>(seed: u64) -> FcWeights<H, W> {
+    let mut rng = XorShiftRng::new(seed);
     let scale = (2.0 / (H + W) as f32).sqrt();
     let weights = Mat3d::new((0..H * W).map(|_| {
         let random_val = rng.next() as f32 / u64::MAX as f32;
@@ -164,11 +138,11 @@ mod test {
         let bias = [1.0, -0.5];
 
         let fc = FcWeights {
-            weights: Mat3d::<1, 3, 2>::new(weights),
+            weights: Mat3d::<1, 2, 3>::new(weights),
             bias: Mat3d::<1, 1, 2>::new(bias),
         };
         let input = Mat3d::<1, 1, 3>::new([2.0, 3.0, -1.0]);
         let result = input.fully_connected_layer(fc).forward();
-        assert_eq!(result.as_slice(), &[0.39999998, -2.6]);
+        assert_eq!(result.as_slice(), &[4.7, 3.4]);
     }
 }

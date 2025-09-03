@@ -25,9 +25,11 @@ where
     }
 
     pub fn activation_mask(&self) -> Mat3d<C, H, W> {
-        activation(&self.input, &mut |v| {
-            *v = F::pass(*v) as u32 as f32;
-        })
+        activation(&self.input, &mut F::pass_mask)
+    }
+
+    pub fn layer_input(&self) -> &Mat3d<C, H, W> {
+        &self.input
     }
 }
 
@@ -63,6 +65,10 @@ pub trait ActivationFunction {
     fn backprop(input: f32, gradient: &mut f32);
 
     fn pass(input: f32) -> bool;
+
+    fn pass_mask(input: &mut f32) {
+        *input = Self::pass(*input) as u32 as f32;
+    }
 }
 
 pub struct Relu;

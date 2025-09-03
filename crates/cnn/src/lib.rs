@@ -10,6 +10,7 @@ pub mod image;
 pub mod layer;
 pub mod matrix;
 pub mod pool;
+pub mod rand;
 pub mod softmax;
 
 pub mod prelude {
@@ -26,7 +27,7 @@ pub mod prelude {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct Cnn<const C: usize, const H: usize, const W: usize>(matrix::Mat3d<C, H, W>);
+pub struct Cnn<const C: usize, const H: usize, const W: usize>(pub matrix::Mat3d<C, H, W>);
 
 impl<const C: usize, const H: usize, const W: usize> Layer for Cnn<C, H, W> {
     type Input = matrix::Mat3d<C, H, W>;
@@ -63,7 +64,7 @@ mod test {
         use prelude::*;
 
         let matrix = Mat3d::zero();
-        let learning_rate = 0.0001;
+        let learning_rate = 0.001;
         let solution = 1;
 
         let mut cnn = Cnn::<1, 28, 28>::default()
@@ -75,7 +76,7 @@ mod test {
             .leaky_relu_layer()
             .max_pool_layer::<2>()
             .flatten_layer()
-            .fully_connected_layer::<2>(FcWeights::glorot())
+            .fully_connected_layer::<2>(FcWeights::glorot(0))
             .softmax_layer();
 
         cnn.input(matrix);
